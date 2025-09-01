@@ -45,7 +45,7 @@ from musubi_tuner.dataset.image_video_dataset import ARCHITECTURE_HUNYUAN_VIDEO
 
 from blissful_tuner.blissful_logger import BlissfulLogger
 
-from musubi_tuner.utils import huggingface_utils, model_utils, train_utils, sai_model_spec
+from musubi_tuner.utils import huggingface_utils, model_utils, train_utils, sai_model_spec, loss_utils
 
 logger = BlissfulLogger(__name__, "green")
  
@@ -1081,7 +1081,7 @@ class FineTuningTrainer:
                     # flow matching loss
                     target = noise - latents
 
-                    loss = torch.nn.functional.mse_loss(model_pred.to(dit_dtype), target, reduction="none")
+                    loss = loss_utils.conditional_loss(model_pred, target, loss_type=args.loss_type, delta_beta=float(args.loss_delta_beta) if args.loss_delta_beta is not None else None)
 
                     if weighting is not None:
                         loss = loss * weighting
@@ -1672,6 +1672,21 @@ def setup_parser() -> argparse.ArgumentParser:
         "--async_upload",
         action="store_true",
         help="upload to huggingface asynchronously / huggingfaceに非同期でアップロードする",
+    )
+
+    parser.add_argument(
+        "--loss_type",
+        type=str,
+        default="l2",
+        choices=["l1", "l2", "pseudo_huber", "huber", "smooth_l1", "scaled_quadratic", "smooth_l2"],
+        help="The type of loss function to use: l1, l2, pseudo_huber, huber, smooth_l1, scaled_quadratic, smooth_l2. Default is l2.",
+    )
+
+    parser.add_argument(
+        "--loss_delta_beta",
+        type=float,
+        default=None,
+        help="The delta or beta for loss types that accept it: pseudo_huber, huber, smooth_l1, scaled_quadratic, smooth_l2",
     )
 
     return parser
