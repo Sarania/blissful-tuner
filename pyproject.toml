@@ -5,25 +5,25 @@ description = "Musubi Tuner by kohya_ss extended to Blissful Tuner by Sarania"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
 dependencies = [
-    "accelerate==1.6.0",
-    "av==14.0.1",
-    "bitsandbytes",
-    "diffusers==0.32.1",
-    "einops==0.7.0",
-    "huggingface-hub==0.34.3",
-    "opencv-python==4.10.0.84",
+    "accelerate~=1.6.0",
+    "av~=14.0.1",
+    "bitsandbytes~=0.47.0",
+    "diffusers~=0.32.1",
+    "einops~=0.7.0",
+    "huggingface-hub~=0.34.3",
+    "opencv-python~=4.10.0.84",
     "pillow>=10.2.0",
-    "safetensors==0.4.5",
+    "safetensors~=0.6.2",
     # "sageattention>=1.0.6",
-    "toml==0.10.2",
-    "tqdm==4.67.1",
-    "transformers==4.54.1",
-    "voluptuous==0.15.2",
+    "toml~=0.10.2",
+    "tqdm~=4.67.1",
+    "transformers~=4.54.1",
+    "voluptuous~=0.15.2",
     # Wan2.1
-    "ftfy==6.3.1",
-    "easydict==1.13",
+    "ftfy~=6.3.1",
+    "easydict~=1.13",
     # FLUX.1 Kontext
-    "sentencepiece==0.2.1",
+    "sentencepiece~=0.2.1",
     # Blissful specific
     "ffmpeg-python>=0.1.18",
     "PySide6>=6.7.0",
@@ -35,17 +35,40 @@ dependencies = [
     "rich-argparse>=1.5.0",
     "rich-tracebacks>=1.0.0",
     "pynput>=1.7.0",
-    "prompt-toolkit==3.0.51",
+    "prompt-toolkit~=3.0.51",
+    # 67372a Additions
+    "matplotlib~=3.10.6",
+    "wandb~=0.21.3",
+    "tensorboard~=2.20.0",
+    "prodigy-plus-schedule-free~=2.0.0rc2",
+    "pytorch_optimizer~=3.8.0",
+    "ninja~=1.13.0",
+    "dadaptation~=3.2",
+    "came-pytorch~=0.1.3",
+    "schedulefree~=1.4.1",
+    "torchastic~=0.1.2",
+    "schedulefree~=1.4.1",
+    "torch-optimi~=0.3.2",
+    "lion-pytorch~=0.2.3",
+    "customized-optimizers @ git+https://github.com/67372a/customized-optimizers",
+    "lycoris-lora @ git+https://github.com/67372a/LyCORIS",
 ]
 
 [project.optional-dependencies]
 cu124 = [
-    "torch>=2.5.1",
-    "torchvision>=0.20.1",
+    "torch~=2.5.1",
+    "torchvision~=0.20.1",
 ]
 cu128 = [
-    "torch>=2.7.1",
-    "torchvision>=0.22.1",
+    "torch~=2.7.1",
+    "torchvision~=0.22.1",
+]
+cu129 = [
+    "torch~=2.8.0",
+    "torchvision~=0.23.0",
+    "triton~=3.4.0; platform_system == 'Linux'",
+    "triton-windows~=3.4.0.post20; platform_system == 'Windows'",
+    "xformers~=0.0.32.post2",
 ]
 
 [tool.uv]
@@ -53,22 +76,23 @@ conflicts = [
   [
     { extra = "cu124" },
     { extra = "cu128" },
+    { extra = "cu129" },
   ],
 ]
 
 [dependency-groups]
 dev = [
-  "ascii-magic==2.3.0",
-  "matplotlib==3.10.0",
+  "ascii-magic~=2.3.0",
+  "matplotlib~=3.10.0",
   "tensorboard",
 ]
 
 postprocess = [
-    "basicsr==1.4.2",
-    "facexlib==0.3.0",
+    "basicsr~=1.4.2",
+    "facexlib~=0.3.0",
     "cupy-cuda12x>=13.3.0",
     "spandrel>=0.4.0",
-    "lpips==0.1.4",
+    "lpips~=0.1.4",
     "ultralytics>=8.3.0",
 ]
 
@@ -83,10 +107,12 @@ packages = ["src/musubi_tuner", "src/blissful_tuner"]
 torch = [
   { index = "pytorch-cu124", extra = "cu124" },
   { index = "pytorch-cu128", extra = "cu128" },
+  { index = "pytorch-cu129", extra = "cu129" },
 ]
 torchvision = [
   { index = "pytorch-cu124", extra = "cu124" },
   { index = "pytorch-cu128", extra = "cu128" },
+  { index = "pytorch-cu129", extra = "cu129" },
 ]
 
 [[tool.uv.index]]
@@ -97,4 +123,9 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
 explicit = true
