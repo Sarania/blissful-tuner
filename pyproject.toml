@@ -103,6 +103,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 packages = ["src/musubi_tuner", "src/blissful_tuner"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.uv.sources]
 torch = [
   { index = "pytorch-cu124", extra = "cu124" },
