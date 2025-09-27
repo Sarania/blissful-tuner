@@ -1675,6 +1675,7 @@ def run_sampling(
 
             # update latent
             latent = temp_x0.squeeze(0)
+
             if km.early_exit_requested:
                 latent = None  # None is a sentinel for early exit and bypasses decode etc, just does clean up
                 break
@@ -1683,6 +1684,12 @@ def run_sampling(
             if args.preview_latent_every is not None and i + 1 == len(timesteps):
                 del previewer  # Free memory in prepartion for return e.g. interactive
     km.terminate()
+
+    if len(models) > 1 and args.lazy_loading:  # lazy loading
+        del model
+        gc.collect()
+        clean_memory_on_device(device)
+
     return latent
 
 
