@@ -34,8 +34,8 @@ from musubi_tuner.utils.lora_utils import load_safetensors_with_lora_and_fp8
 from musubi_tuner.utils.model_utils import create_cpu_offloading_wrapper
 
 from blissful_tuner.blissful_logger import BlissfulLogger
-logger = BlissfulLogger(__name__, "green")
 
+logger = BlissfulLogger(__name__, "green")
 
 
 EXAMPLE_DOC_STRING = """
@@ -1202,7 +1202,6 @@ class QwenImageTransformer2DModel(nn.Module):  # ModelMixin, ConfigMixin, PeftAd
             self.offloader.set_forward_only(True)
             self.prepare_block_swap_before_forward()
             logger.info("QwenModel: Block swap set to forward only.")
-
 
     def switch_block_swap_for_training(self):
         if self.blocks_to_swap:

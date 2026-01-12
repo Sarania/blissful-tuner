@@ -19,9 +19,12 @@ from musubi_tuner.kandinsky5.models.text_embedders import get_text_embedder
 from musubi_tuner.kandinsky5_train_network import Kandinsky5NetworkTrainer
 from musubi_tuner.hv_train_network import clean_memory_on_device
 from musubi_tuner.networks import lora_kandinsky
+
+from blissful_tuner.blissful_core import add_blissful_k5_args, parse_blissful_args
 from blissful_tuner.guidance import parse_scheduled_cfg
 from blissful_tuner.common_extensions import save_media_advanced
 from blissful_tuner.blissful_logger import BlissfulLogger
+
 
 logger = BlissfulLogger(__name__, "green")
 
@@ -50,13 +53,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save_path", type=str, required=True)
     parser.add_argument("--width", type=int, default=None)
     parser.add_argument("--height", type=int, default=None)
-    parser.add_argument("--frames", type=int, default=None)
+    parser.add_argument("--frames", type=int, default=None, help="Output length in latent frames, exclusive of '--video_length'")
+    parser.add_argument(
+        "--video_length",
+        type=int,
+        default=None,
+        help="Output length in pixel frames, exclusive of '--frames' and will be rounded up to fit 4n + 1 if necessary.",
+    )
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--guidance", type=float, default=None)
     parser.add_argument(
         "--scheduler_scale", type=float, default=None, help="Like flow shift for other models, alters timestep distribution"
     )
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=str, default="42")
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--dit", type=str, default=None)
     parser.add_argument("--vae", type=str, default=None)
@@ -76,78 +85,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sage_attn", action="store_true", help="use SageAttention for visual attention")
     parser.add_argument("--xformers", action="store_true", help="use xformers for visual attention")
     parser.add_argument("--lora_weight", type=str, nargs="*", default=None, help="LoRA weight path(s) to merge for inference")
-    parser.add_argument("--fps", type=int, default=24, help="FPS for output video, 24 is default for K5")
-    parser.add_argument(
-        "--decode_from_latent",
-        type=str,
-        default=None,
-        help="Decode a video from latent instead of generating it. Provide path as argument.",
-    )
     parser.add_argument(
         "--lora_multiplier", type=float, nargs="*", default=None, help="LoRA multiplier(s), align with lora_weight order"
     )
-    parser.add_argument(
-        "--codec",
-        choices=["h264", "h265", "prores"],
-        default="h264",
-        help="Codec to use when saving videos, choose from 'prores', 'h264', or 'h265'. Default is 'h264'",
-    )
-    parser.add_argument(
-        "--container",
-        choices=["mkv", "mp4"],
-        default="mp4",
-        help="Container format to use for output, choose from 'mkv' or 'mp4'. Default is 'mp4' and note that 'prores' can only go in 'mkv'! Ignored for images.",
-    )
-    parser.add_argument("--preview_vae", type=str, help="Path to TAE vae for taehv previews")
-    parser.add_argument("--cfg_schedule", type=str, default=None, help="")
-    parser.add_argument("--text_encoder_cpu", action="store_true", help="Run Qwen on CPU(e.g. if VRAM insufficient)")
-    parser.add_argument("--nf4_qwen", action="store_true", help="Quantize Qwen TE to NF4 with BitsAndBytes")
-    parser.add_argument("--compile", action="store_true", help="Enable torch.compile optimization")
-    parser.add_argument("--output_type", type=str, default="video", choices=["video", "latent", "both"], help="output type")
-    parser.add_argument("--fp16_accumulation", action="store_true")
-    parser.add_argument(
-        "--preview_latent_every",
-        type=int,
-        default=None,
-        help="Enable latent preview every N steps. If --preview_vae is not specified it will use latent2rgb",
-    )
-    parser.add_argument(
-        "--cfgzerostar_scaling", action="store_true", help="Enables CFG-Zero* scaling - https://github.com/WeichenFan/CFG-Zero-star"
-    )
-    parser.add_argument(
-        "--cfgzerostar_multiplier",
-        type=float,
-        default=0,
-        help="Multiplier used for cfgzerostar_init. Default is 0 which zeroes the step. 1 would be like not using zero init.",
-    )
-    parser.add_argument(
-        "--cfgzerostar_init_steps",
-        type=int,
-        default=-1,
-        help="Enables CFGZero* zeroing out the first N steps. 2 is good for Wan T2V, 1 for I2V",
-    )
-    parser.add_argument("--tf32_mode", action="store_true", help="Enable TF32 (19-bit) multiply add for fp32 operations.")
-    parser.add_argument(
-        "--save_last_frame", action="store_true", help="Save last frame of video as PNG (useful for continuing a generation)"
-    )
-    parser.add_argument(
-        "--scheduler", type=str, default="default", choices=["default", "dpm++"], help="Scheduler to use for inference"
-    )
-    parser.add_argument(
-        "--force_traditional_attn", action="store_true", help="Force Flash/Sage/etc attention even when task requests NABLA"
-    )
-    parser.add_argument("--force_nabla_attn", action="store_true", help="Force NABLA attention even when task requests traditional")
-    parser.add_argument(
-        "--nabla_p",
-        type=float,
-        default=0.9,
-        help="NABLA P value for when using forced NABLA(ignored if task conf specifies a P value).",
-    )
-    parser.add_argument(
-        "--disable_vae_workaround",
-        action="store_true",
-        help="Disables patching the VAE to fix massive OOM on latest PyTorch versions. This patch seems not necessary on at least some earlier versions and quality is potentially improved without it.",
-    )
+    parser.add_argument("--fps", type=int, default=24, help="FPS for output video, 24 is default for K5")
+    parser = add_blissful_k5_args(parser)
     return parser.parse_args()
 
 
@@ -156,9 +98,28 @@ str_to_torch = {"float16": torch.float16, "float32": torch.float32, "bfloat16": 
 
 def main():
     args = parse_args()
+    args = parse_blissful_args(args)
     if args.nf4_qwen and args.text_encoder_cpu:
         raise argparse.ArgumentError("Only one of '--nf4_qwen' or '--text_encoder_cpu' may be used at a time but received both!")
+    if args.frames and args.video_length:
+        raise argparse.ArgumentError("Only one of '--frames' and '--video_length' is allowed but recieved both!")
 
+    if args.video_length is not None:
+        original = args.video_length
+        corrected = 4 * ((original - 1 + 3) // 4) + 1
+
+        if corrected != original:
+            logger.warning(f"video_length {original} is invalid; rounding up to {corrected} (4n + 1 required)")
+
+        args.video_length = corrected
+        args.frames = (corrected - 1) // 4 + 1
+    elif args.frames is not None:
+        args.video_length = ((args.frames - 1) * 4) + 1
+    if args.compile:
+        logger.info("Enabling torch.compile!")
+        from musubi_tuner.kandinsky5.models.nn import activate_compile
+
+        activate_compile()
     args.vae_dtype = str_to_torch[args.vae_dtype]
     task_conf = TASK_CONFIGS[args.task]
     if args.force_traditional_attn:
@@ -201,11 +162,12 @@ def main():
 
     guidance = args.guidance if args.guidance is not None else task_conf.guidance_weight
     scheduler_scale = args.scheduler_scale if args.scheduler_scale is not None else (task_conf.scheduler_scale or 1.0)
-    logger.info(f"WHF: {width}x{height}x{frames}, steps: {steps}, guidance: {guidance}, scale {scheduler_scale}")
     latent_h = max(1, height // 8)
     latent_w = max(1, width // 8)
     shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
-
+    logger.info(
+        f"WHF: {width}x{height}x{args.video_length}, Latent WHF: {latent_w}x{latent_h}x{frames}, Steps: {steps}, Guidance: {guidance}, Shift: {scheduler_scale}"
+    )
     # Resolve paths
     dit_path = args.dit or task_conf.checkpoint_path
     vae_path = args.vae or task_conf.vae.checkpoint_path

@@ -30,6 +30,7 @@ import numpy as np
 from musubi_tuner.qwen_image.qwen_image_modules import get_activation
 
 from blissful_tuner.blissful_logger import BlissfulLogger
+
 logger = BlissfulLogger(__name__, "green")
 
 CACHE_T = 2

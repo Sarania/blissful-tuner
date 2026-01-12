@@ -13,8 +13,6 @@ from torch.nn.attention.flex_attention import flex_attention
 from .utils import get_freqs, nablaT_v2
 from .attention import SelfAttentionEngine
 
-# torch.compile toggle is set via set_compile_enabled (default: disabled)
-_ENABLE_COMPILE = True
 _GLOBAL_DTYPE = torch.bfloat16
 
 
@@ -23,17 +21,34 @@ def set_global_dtype_nn(dtype: torch.dtype):
     _GLOBAL_DTYPE = dtype
 
 
-def set_compile_enabled(enabled: bool):
-    global _ENABLE_COMPILE
-    _ENABLE_COMPILE = bool(enabled)  # It's a bool, fool
+def _maybe_compile(fn=None, **compile_kwargs):
+    if not hasattr(_maybe_compile, "compile_targets"):
+        _maybe_compile.compile_targets = []
 
-
-def _maybe_compile(fn=None, **kwargs):
     if fn is None:
-        return lambda f: _maybe_compile(f, **kwargs)
-    if _ENABLE_COMPILE:
-        return torch.compile(fn, **kwargs)
-    return fn
+        return lambda f: _maybe_compile(f, **compile_kwargs)
+
+    # Create a wrapper so we can replace it later
+    def wrapper(*args, **kwargs):
+        return wrapper._fn(*args, **kwargs)
+
+    wrapper._fn = fn
+    wrapper._orig_fn = fn
+    wrapper._compile_kwargs = compile_kwargs
+
+    _maybe_compile.compile_targets.append(wrapper)
+
+    return wrapper
+
+
+def activate_compile():
+    if not hasattr(_maybe_compile, "compile_targets"):
+        return
+
+    for wrapper in _maybe_compile.compile_targets:
+        if not hasattr(wrapper, "_compiled"):
+            wrapper._fn = torch.compile(wrapper._fn, **wrapper._compile_kwargs)
+            wrapper._compiled = True
 
 
 @_maybe_compile()
