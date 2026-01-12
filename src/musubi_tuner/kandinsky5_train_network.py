@@ -34,10 +34,9 @@ from musubi_tuner.modules.fp8_optimization_utils import (
 )
 from musubi_tuner.utils import model_utils
 
-import logging
+from blissful_tuner.blissful_logger import BlissfulLogger
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logger = BlissfulLogger(__name__, "green")
 
 
 class Kandinsky5NetworkTrainer(NetworkTrainer):
@@ -612,7 +611,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 logger.info(
                     "blocks_to_swap > 0, quantizing fp8 on GPU and keeping weights on CPU for block swap (all transformer blocks)."
                 )
-                block_size = 64  # larger block to reduce scale tensor size in CPU path
+                block_size = 32  # larger block to reduce scale tensor size in CPU path
             try:
                 state_dict = optimize_state_dict_with_fp8(
                     state_dict,
@@ -657,16 +656,18 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 if isinstance(b, torch.Tensor) and any(key in name for key in ["embedding", "embeddings", "rope"]):
                     setattr(m, name, b.to(torch.float32))
 
+        cast_dtype = dit_weight_dtype if dit_weight_dtype is not None else torch.bfloat16
+
         for mod in model.modules():
             if isinstance(mod, (nn.LayerNorm, getattr(nn, "RMSNorm", nn.LayerNorm))):
                 if hasattr(mod, "weight") and isinstance(mod.weight, torch.Tensor):
-                    mod.weight.data = mod.weight.data.to(torch.bfloat16)
+                    mod.weight.data = mod.weight.data.to(cast_dtype)
                 if hasattr(mod, "bias") and isinstance(mod.bias, torch.Tensor) and mod.bias is not None:
-                    mod.bias.data = mod.bias.data.to(torch.bfloat16)
+                    mod.bias.data = mod.bias.data.to(cast_dtype)
             _upcast_stable_params(mod)
         for name, param in model.named_parameters():
             if "norm" in name:
-                param.data = param.data.to(torch.bfloat16)
+                param.data = param.data.to(cast_dtype)
 
         # Cast any stray fp8 params/buffers outside Linear fp8 modules back to bf16 to avoid unsupported ops.
         for mod in model.modules():
@@ -674,10 +675,10 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             if not is_fp8_linear:
                 for p in mod.parameters(recurse=False):
                     if p.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
-                        p.data = p.data.to(torch.bfloat16)
+                        p.data = p.data.to(cast_dtype)
                 for b_name, b in mod.named_buffers(recurse=False):
                     if isinstance(b, torch.Tensor) and b.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
-                        setattr(mod, b_name, b.to(torch.bfloat16))
+                        setattr(mod, b_name, b.to(cast_dtype))
 
         # Ensure fp8 linears use safe dequant (float32 scale/weight) to avoid unsupported float8 ops.
         for name, module in model.named_modules():
@@ -720,8 +721,8 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
     def _load_vae_for_sampling(self, args: argparse.Namespace, device: torch.device):
         vae_conf = SimpleNamespace(name=self.task_conf.vae.name, checkpoint_path=self._vae_checkpoint_path)
         # Decode has been unstable in fp16 on some GPUs; prefer float32 for sampling.
-        target_dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-        vae = build_vae(vae_conf, vae_dtype=target_dtype)
+        target_dtype = args.vae_dtype if device.type == "cuda" else torch.float32
+        vae = build_vae(vae_conf, vae_dtype=target_dtype, enable_safety=not args.disable_vae_workaround)
         # Enable VAE tiling to reduce VRAM during sampling when available.
         if hasattr(vae, "apply_tiling"):
             tile = (1, 17, 256, 256)

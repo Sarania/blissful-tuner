@@ -2,8 +2,6 @@
 # https://github.com/kandinskylab/kandinsky-5
 # Copyright (c) 2025 Kandinsky Lab
 # Licensed under the MIT License
-
-import logging
 import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
@@ -27,7 +25,9 @@ from .nn import (
 from .utils import fractal_flatten, fractal_unflatten
 from musubi_tuner.modules.custom_offloading_utils import ModelOffloader
 
-logger = logging.getLogger(__name__)
+from blissful_tuner.blissful_logger import BlissfulLogger
+
+logger = BlissfulLogger(__name__, "green")
 
 
 class TransformerEncoderBlock(nn.Module):

@@ -363,6 +363,9 @@ class BlissfulVideoProcessor:
             codec_args = self._get_ffmpeg_codec_args()
             cmd = [
                 "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
                 "-framerate",
                 str(fps),
                 "-i",

@@ -14,12 +14,18 @@ from .utils import get_freqs, nablaT_v2
 from .attention import SelfAttentionEngine
 
 # torch.compile toggle is set via set_compile_enabled (default: disabled)
-_ENABLE_COMPILE = False
+_ENABLE_COMPILE = True
+_GLOBAL_DTYPE = torch.bfloat16
+
+
+def set_global_dtype_nn(dtype: torch.dtype):
+    global _GLOBAL_DTYPE
+    _GLOBAL_DTYPE = dtype
 
 
 def set_compile_enabled(enabled: bool):
     global _ENABLE_COMPILE
-    _ENABLE_COMPILE = bool(enabled)
+    _ENABLE_COMPILE = bool(enabled)  # It's a bool, fool
 
 
 def _maybe_compile(fn=None, **kwargs):
@@ -33,13 +39,13 @@ def _maybe_compile(fn=None, **kwargs):
 @_maybe_compile()
 @torch.autocast(device_type="cuda", dtype=torch.float32)
 def apply_scale_shift_norm(norm, x, scale, shift):
-    return (norm(x) * (scale + 1.0) + shift).to(torch.bfloat16)
+    return (norm(x) * (scale + 1.0) + shift).to(_GLOBAL_DTYPE)
 
 
 @_maybe_compile()
 @torch.autocast(device_type="cuda", dtype=torch.float32)
 def apply_gate_sum(x, out, gate):
-    return (x + gate * out).to(torch.bfloat16)
+    return (x + gate * out).to(_GLOBAL_DTYPE)
 
 
 @_maybe_compile()
@@ -47,7 +53,7 @@ def apply_gate_sum(x, out, gate):
 def apply_rotary(x, rope):
     x_ = x.reshape(*x.shape[:-1], -1, 1, 2).to(torch.float32)
     x_out = (rope * x_).sum(dim=-1)
-    return x_out.reshape(*x.shape).to(torch.bfloat16)
+    return x_out.reshape(*x.shape).to(_GLOBAL_DTYPE)
 
 
 class TimeEmbeddings(nn.Module):

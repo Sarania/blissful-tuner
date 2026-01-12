@@ -9,6 +9,7 @@ Created on Mon Mar 10 16:47:29 2025
 """
 
 import argparse
+import copy
 import os
 from typing import List, Optional
 import torch
@@ -43,14 +44,16 @@ class LatentPreviewer:
         self.scheduler = None
         self.sigmas = None
         self.warning_done = False
+        self.noise_remain = None
 
-        if self.model_type not in ["hunyuan", "wan", "framepack", "flux"]:
+        if self.model_type not in ["hunyuan", "wan", "framepack", "flux", "k5"]:
             raise ValueError(f"Unsupported model type: {self.model_type}")
 
         if (
             model_type != "framepack" and original_latents is not None
         ):  # Framepack will send in na clean latent, others will be noisy
-            self.original_latents = original_latents.to(self.device)
+            copied_latents = copy.deepcopy(original_latents)
+            self.original_latents = copied_latents.to(self.device)
             self.subtract_noise = True
             if scheduler is not None:
                 self.sigmas = scheduler.sigmas
@@ -74,7 +77,7 @@ class LatentPreviewer:
         if self.model_type == "wan":
             noisy_latents = noisy_latents.unsqueeze(0)  # F, C, H, W -> B, F, C, H, W
         elif self.model_type in ["hunyuan", "framepack"]:
-            pass  # already B, F, C, H, W
+            pass
         denoisy_latents = self.subtract_original_and_normalize(noisy_latents, step) if self.subtract_noise else noisy_latents
         decoded = self.decoder(denoisy_latents)  # returned as F, C, H, W
 
@@ -101,6 +104,8 @@ class LatentPreviewer:
             noise_remaining = self.sigmas[self.scheduler.step_index]  # get step directly from scheduler
             if hasattr(self.scheduler, "last_noise") and self.scheduler.last_noise is not None:
                 noise = self.scheduler.last_noise  # Some schedulers e.g. LCM change the noise/use additional noise.
+        elif self.noise_remain is not None:
+            noise_remaining = self.noise_remain
         elif step is not None and self.sigmas is not None:
             noise_remaining = self.sigmas[step]
         else:
@@ -161,7 +166,11 @@ class LatentPreviewer:
         Decodes latents with the TAEHV model, returns shape (F, C, H, W).
         """
         self.tae.to(self.device)  # Onload
-        latents_permuted = latents.permute(0, 2, 1, 3, 4)  # Reordered to B, F, C, H, W for TAE
+        if self.model_type != "k5":
+            latents_permuted = latents.permute(0, 2, 1, 3, 4)  # Reordered to B, F, C, H, W for TAE
+        else:
+            latents_permuted = latents.permute(0, 3, 1, 2)  # Reordered to F, C, H, W for TAE
+            latents_permuted = latents_permuted.unsqueeze(0)  # B
         latents_permuted = latents_permuted.to(device=self.device, dtype=self.dtype)
         decoded = self.tae.decode_video(latents_permuted, parallel=False, show_progress_bar=False)
         self.tae.to("cpu")  # Offload
@@ -245,10 +254,9 @@ class LatentPreviewer:
                 "bias": [-0.0329, -0.0718, -0.0851],
             },
         }
-        latent_rgb_factors = (
-            model_params[self.model_type]["rgb_factors"] if self.model_type != "framepack" else model_params["hunyuan"]
-        )
-        latent_rgb_factors_bias = model_params[self.model_type]["bias"]
+        idx = self.model_type if self.model_type not in ["k5", "framepack"] else "hunyuan"
+        latent_rgb_factors = model_params[idx]["rgb_factors"]
+        latent_rgb_factors_bias = model_params[idx]["bias"]
 
         # Prepare linear transform
         latent_rgb_factors = torch.tensor(latent_rgb_factors, device=latents.device, dtype=latents.dtype).transpose(0, 1)
