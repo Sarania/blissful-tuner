@@ -19,7 +19,7 @@ from blissful_tuner.utils import power_seed
 
 logger = BlissfulLogger(__name__, "#8e00ed")
 
-BLISSFUL_VERSION = "0.12.66"
+BLISSFUL_VERSION = "0.13.66"
 
 CFG_SCHEDULE_HELP = """
 Comma-separated list of steps/ranges where CFG should be applied.
@@ -484,7 +484,11 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument(
         "--output_type", type=str, default="video", choices=["video", "latent", "both"], help="Type of output to produce."
     )
-    parser.add_argument("--fp16_accumulation", action="store_true")
+    parser.add_argument(
+        "--fp16_accumulation",
+        action="store_true",
+        help="Enable full FP16 Accmumulation in FP16 GEMMs and set autocast to FP16 for much better speed at small cost to quality, requires Pytorch 2.7.0 or higher",
+    )
     parser.add_argument(
         "--preview_latent_every",
         type=int,
@@ -511,7 +515,11 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         "--save_last_frame", action="store_true", help="Save last frame of video as PNG (useful for continuing a generation)"
     )
     parser.add_argument(
-        "--scheduler", type=str, default="default", choices=["default", "dpm++"], help="Scheduler to use for inference"
+        "--scheduler",
+        type=str,
+        default="default",
+        choices=["default", "dpm++"],
+        help="Scheduler to use for inference, default is probably best right now",
     )
     parser.add_argument(
         "--force_traditional_attn", action="store_true", help="Force Flash/Sage/etc attention even when task requests NABLA"

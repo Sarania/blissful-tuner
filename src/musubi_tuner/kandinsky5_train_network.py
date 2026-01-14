@@ -616,12 +616,16 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 )
                 block_size = 32  # larger block to reduce scale tensor size in CPU path
             try:
+                quantization_mode = "block" if not args.fp8_fast else "tensor"
+                logger.info(
+                    f"Using per '{quantization_mode}' quantization mode as scaled_mm/fp8_fast {'is' if args.fp8_fast else 'is not'} enabled"
+                )
                 state_dict = optimize_state_dict_with_fp8(
                     state_dict,
                     calc_device=fp8_quant_device,
                     target_layer_keys=target_keys,
                     exclude_layer_keys=exclude_keys,
-                    quantization_mode="block",
+                    quantization_mode=quantization_mode,
                     block_size=block_size,
                     move_to_device=move_to_device,
                 )

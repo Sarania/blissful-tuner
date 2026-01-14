@@ -437,8 +437,6 @@ def generate(
         if scheduler is None:
             previewer.sigmas = timesteps
 
-    logger.info(f"Timesteps {timesteps}")
-
     if tp_mesh:
         tp_rank = tp_mesh["tensor_parallel"].get_local_rank()
         tp_world_size = tp_mesh["tensor_parallel"].size()

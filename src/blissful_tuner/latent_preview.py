@@ -72,11 +72,12 @@ class LatentPreviewer:
             self.decoder = self.decode_latent2rgb
 
     @torch.inference_mode()
-    def preview(self, noisy_latents: torch.Tensor, step: Optional[int] = None) -> None:
+    def preview(self, latents_to_preview: torch.Tensor, step: Optional[int] = None) -> None:
         self.clean_cache()
-        if self.model_type == "wan":
-            noisy_latents = noisy_latents.unsqueeze(0)  # F, C, H, W -> B, F, C, H, W
-        elif self.model_type in ["hunyuan", "framepack"]:
+        noisy_latents = copy.deepcopy(latents_to_preview)  # Break assoc with original
+        if self.model_type in ["wan", "k5"]:
+            noisy_latents = noisy_latents.unsqueeze(0)  # Add B dim
+        elif self.model_type in ["hunyuan", "framepack"]:  # Already has B dim
             pass
         denoisy_latents = self.subtract_original_and_normalize(noisy_latents, step) if self.subtract_noise else noisy_latents
         decoded = self.decoder(denoisy_latents)  # returned as F, C, H, W
@@ -98,6 +99,7 @@ class LatentPreviewer:
 
     @torch.inference_mode()
     def subtract_original_and_normalize(self, noisy_latents: torch.Tensor, step: Optional[int] = None):
+        # TODO: Make this not awful
         device = noisy_latents.device
         noise = self.original_latents
         if self.scheduler is not None and self.sigmas is not None:
@@ -166,11 +168,10 @@ class LatentPreviewer:
         Decodes latents with the TAEHV model, returns shape (F, C, H, W).
         """
         self.tae.to(self.device)  # Onload
-        if self.model_type != "k5":
+        if self.model_type != "k5":  # comes in as B, C, F, H, W
             latents_permuted = latents.permute(0, 2, 1, 3, 4)  # Reordered to B, F, C, H, W for TAE
-        else:
-            latents_permuted = latents.permute(0, 3, 1, 2)  # Reordered to F, C, H, W for TAE
-            latents_permuted = latents_permuted.unsqueeze(0)  # B
+        else:  # comes in as  B, F, H, W, C e.g. channels last
+            latents_permuted = latents.permute(0, 1, 4, 2, 3)  # Reordered to B, F, C, H, W for TAE
         latents_permuted = latents_permuted.to(device=self.device, dtype=self.dtype)
         decoded = self.tae.decode_video(latents_permuted, parallel=False, show_progress_bar=False)
         self.tae.to("cpu")  # Offload
@@ -254,6 +255,8 @@ class LatentPreviewer:
                 "bias": [-0.0329, -0.0718, -0.0851],
             },
         }
+        if self.model_type == "k5":
+            latents = latents.permute(0, 4, 1, 2, 3)  # Comes in as channels last
         idx = self.model_type if self.model_type not in ["k5", "framepack"] else "hunyuan"
         latent_rgb_factors = model_params[idx]["rgb_factors"]
         latent_rgb_factors_bias = model_params[idx]["bias"]
