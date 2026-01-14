@@ -32,9 +32,9 @@ from musubi_tuner.modules.fp8_optimization_utils import (
     optimize_state_dict_with_fp8,
     apply_fp8_monkey_patch,
 )
-from musubi_tuner.utils import model_utils
 
 from blissful_tuner.blissful_logger import BlissfulLogger
+from blissful_tuner.utils import ensure_dtype_form
 
 logger = BlissfulLogger(__name__, "green")
 
@@ -238,8 +238,8 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 # 1) Encode text, then free encoder
                 text_embedder = get_text_embedder(
                     text_embedder_conf,
-                    device=accelerator.device,
-                    quantized_qwen=False,
+                    device=accelerator.device if not getattr(args, "text_encoder_cpu", False) else "cpu",
+                    quantized_qwen=getattr(args, "quantized_qwen", False),
                 )
                 # default negative prompt if none provided
                 neg_text = neg_prompt if neg_prompt else "low quality, bad quality"
@@ -391,12 +391,14 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 clean_memory_on_device(accelerator.device)
 
                 # save video and first frame
-                from musubi_tuner.hv_generate_video import save_videos_grid
+                if duration > 1:  # Only make a video if more than 1 frame
+                    from musubi_tuner.hv_generate_video import save_videos_grid
 
-                video_out = os.path.join(save_dir, f"sample_{steps:06d}_{idx:02d}.mp4")
-                # move to CPU before saving to avoid numpy conversion on CUDA tensors
-                video_tensor = images.permute(0, 4, 1, 2, 3).float().cpu() / 255.0
-                save_videos_grid(video_tensor, video_out, rescale=False, n_rows=1)
+                    video_out = os.path.join(save_dir, f"sample_{steps:06d}_{idx:02d}.mp4")
+                    # move to CPU before saving to avoid numpy conversion on CUDA tensors
+                    video_tensor = images.permute(0, 4, 1, 2, 3).float().cpu() / 255.0
+                    save_videos_grid(video_tensor, video_out, rescale=False, n_rows=1)
+                    logger.info(f"Saved sample to {video_out}")
 
                 out_path = os.path.join(save_dir, f"sample_{steps:06d}_{idx:02d}.png")
                 import torchvision.utils as vutils
@@ -405,7 +407,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 frame = frame.float().cpu() / 255.0
                 frame = frame.permute(2, 0, 1)  # C, H, W
                 vutils.save_image(frame, out_path)
-                logger.info(f"Saved sample to {out_path} and {video_out}")
+                logger.info(f"Saved first frame of sample to {out_path}")
 
         # move DiT back to training device if we offloaded it
         if transformer_offloaded and original_device != next(transformer.parameters()).device:
@@ -464,10 +466,11 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 max_length=self.task_conf.text.clip_max_length,
             ),
         )
+
         text_embedder = get_text_embedder(
             text_embedder_conf,
-            device=accelerator.device,
-            quantized_qwen=False,
+            device=accelerator.device if not getattr(args, "text_encoder_cpu", False) else "cpu",
+            quantized_qwen=getattr(args, "quantized_qwen", False),
         )
 
         images = generation_utils.generate_sample(
@@ -707,12 +710,19 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
 
     def compile_transformer(self, args, transformer):
         transformer: DiffusionTransformer3D = transformer
-        return model_utils.compile_transformer(
-            args,
-            transformer,
-            [transformer.text_transformer_blocks, transformer.visual_transformer_blocks],
-            disable_linear=self.blocks_to_swap > 0,
+        k5_attention.activate_compile(
+            mode=args.compile_mode, backend=args.compile_backend, fullgraph=args.compile_fullgraph, dynamic=args.compile_dynamic
         )
+        k5_nn.activate_compile(
+            mode=args.compile_mode, backend=args.compile_backend, fullgraph=args.compile_fullgraph, dynamic=args.compile_dynamic
+        )
+        return transformer  # Compile handled at module level
+        # return model_utils.compile_transformer(
+        #     args,
+        #     transformer,
+        #     [transformer.text_transformer_blocks, transformer.visual_transformer_blocks],
+        #     disable_linear=self.blocks_to_swap > 0,
+        # )
 
     def scale_shift_latents(self, latents):
         # Latents were scaled during caching; avoid re-scaling during training.
@@ -722,7 +732,9 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         vae_conf = SimpleNamespace(name=self.task_conf.vae.name, checkpoint_path=self._vae_checkpoint_path)
         # Decode has been unstable in fp16 on some GPUs; prefer float32 for sampling.
         target_dtype = args.vae_dtype if device.type == "cuda" else torch.float32
-        vae = build_vae(vae_conf, vae_dtype=target_dtype, enable_safety=not args.disable_vae_workaround)
+        target_dtype = ensure_dtype_form(target_dtype, out_form="torch")
+        disable_vae_workaround = getattr(args, "disable_vae_workaround", False)
+        vae = build_vae(vae_conf, vae_dtype=target_dtype, enable_safety=not disable_vae_workaround)
         # Enable VAE tiling to reduce VRAM during sampling when available.
         if hasattr(vae, "apply_tiling"):
             tile = (1, 17, 256, 256)
@@ -941,6 +953,8 @@ def kandinsky5_setup_parser(parser: argparse.ArgumentParser) -> argparse.Argumen
     parser.add_argument(
         "--no_nabla_add_sta", dest="nabla_add_sta", action="store_false", help="Disable STA prior when forcing nabla attention"
     )
+    parser.add_argument("--quantized_qwen", action="store_true", help="Load Qwen text encoder in 4bit mode")
+    parser.add_argument("--text_encoder_cpu", action="store_true", help="Run Qwen TE on CPU")
 
     return parser
 
@@ -951,10 +965,6 @@ def main():
 
     args = parser.parse_args()
     args = read_config_from_file(args, parser)
-
-    # Propagate compile flag to Kandinsky modules (defaults to disabled).
-    k5_attention.set_compile_enabled(bool(getattr(args, "compile", False)))
-    k5_nn.set_compile_enabled(bool(getattr(args, "compile", False)))
 
     # defaults for fp8 flags (not defined in common parser)
     if not hasattr(args, "fp8_base"):

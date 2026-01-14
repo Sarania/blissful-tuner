@@ -504,7 +504,7 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         "--cfgzerostar_init_steps",
         type=int,
         default=-1,
-        help="Enables CFGZero* zeroing out the first N steps. 2 is good for Wan T2V, 1 for I2V",
+        help="Enables CFGZero* zeroing out the first N steps. Recommend 1 at most for K5",
     )
     parser.add_argument("--tf32_mode", action="store_true", help="Enable TF32 (19-bit) multiply add for fp32 operations.")
     parser.add_argument(
@@ -526,7 +526,7 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument(
         "--disable_vae_workaround",
         action="store_true",
-        help="Disables patching the VAE to fix massive OOM on latest PyTorch versions. This patch seems not necessary on at least some earlier versions and quality is potentially improved without it.",
+        help="Disables patching the VAE to fix massive OOM on latest PyTorch/CUDA versions. This patch seems not necessary on at least some earlier versions and quality is potentially improved without it.",
     )
     parser.add_argument(
         "--prompt_wildcards",

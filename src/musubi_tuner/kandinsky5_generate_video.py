@@ -20,6 +20,7 @@ from musubi_tuner.kandinsky5_train_network import Kandinsky5NetworkTrainer
 from musubi_tuner.hv_train_network import clean_memory_on_device
 from musubi_tuner.networks import lora_kandinsky
 
+from blissful_tuner.utils import ensure_dtype_form
 from blissful_tuner.blissful_core import add_blissful_k5_args, parse_blissful_args
 from blissful_tuner.guidance import parse_scheduled_cfg
 from blissful_tuner.common_extensions import save_media_advanced
@@ -71,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vae", type=str, default=None)
     parser.add_argument("--text_encoder_qwen", type=str, default=None)
     parser.add_argument("--text_encoder_clip", type=str, default=None)
-    parser.add_argument("--dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"])
+    parser.add_argument("--dtype", type=str, default=None, choices=[None, "bfloat16", "float16", "float32"])
     parser.add_argument("--vae_dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"])
     parser.add_argument("--blocks_to_swap", type=int, default=0)
     parser.add_argument("--offload_dit_during_sampling", action="store_true")
@@ -91,9 +92,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=24, help="FPS for output video, 24 is default for K5")
     parser = add_blissful_k5_args(parser)
     return parser.parse_args()
-
-
-str_to_torch = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}
 
 
 def main():
@@ -120,7 +118,7 @@ def main():
         from musubi_tuner.kandinsky5.models.nn import activate_compile
 
         activate_compile()
-    args.vae_dtype = str_to_torch[args.vae_dtype]
+    args.vae_dtype = ensure_dtype_form(args.vae_dtype, out_form="torch")
     task_conf = TASK_CONFIGS[args.task]
     if args.force_traditional_attn:
         if task_conf.attention.type != "flash":
@@ -150,8 +148,6 @@ def main():
         else:
             logger.warning("Requested forced NABLA but task type already defaults to NABLA!")
     device = _get_device(args.device)
-
-    _ = getattr(torch, args.dtype)  # ?
 
     width = args.width or task_conf.resolution
     height = args.height or task_conf.resolution
@@ -258,7 +254,7 @@ def main():
             torch.set_float32_matmul_precision("high")
             torch.backends.cudnn.conv.fp32_precision = "tf32"
             torch.backends.cuda.matmul.fp32_precision = "tf32"
-        dit_weight_dtype = None if args.fp8_base or args.fp8_scaled else str_to_torch[args.dtype]
+        dit_weight_dtype = None if args.fp8_base or args.fp8_scaled else ensure_dtype_form(args.dtype, out_form="torch")
         conf_ns = SimpleNamespace(model=task_conf, metrics=SimpleNamespace(scale_factor=task_conf.scale_factor))
 
         with torch.no_grad():
@@ -314,17 +310,13 @@ def main():
                 autocast_dtype = dit_weight_dtype if device.type == "cuda" else None
             else:
                 autocast_dtype = torch.bfloat16 if not args.fp16_accumulation else torch.float16
+
             if autocast_dtype is not None:
                 set_global_dtype(autocast_dtype)
             blissful_args = {"scale_per_step": scale_per_step, "args": args}
             if args.fp16_accumulation:
-                logger.info("Enable fp16 accumulation")
+                logger.info("Enabling fp16 accumulation and switching autocast to float16 for maximum performance.")
                 torch.backends.cuda.matmul.allow_fp16_accumulation = True
-                warn = dit_weight_dtype is not None and autocast_dtype != torch.float16
-                if warn:
-                    logger.warning(
-                        f"FP16 accumulation is enabled but model is in {dit_weight_dtype} precision and autocast is {autocast_dtype} which may not give the best performance! Please consider using '--dtype float16' for better performance!"
-                    )
 
             transformer_offloaded = args.offload_dit_during_sampling and device.type == "cuda"
             original_device = device
