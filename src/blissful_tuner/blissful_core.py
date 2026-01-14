@@ -479,7 +479,7 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument("--preview_vae", type=str, help="Path to TAE vae for taehv previews")
     parser.add_argument("--cfg_schedule", type=str, default=None, help=CFG_SCHEDULE_HELP)
     parser.add_argument("--text_encoder_cpu", action="store_true", help="Run Qwen on CPU(e.g. if VRAM insufficient)")
-    parser.add_argument("--nf4_qwen", action="store_true", help="Quantize Qwen TE to NF4 with BitsAndBytes to save VRAM")
+    parser.add_argument("--quantized_qwen", action="store_true", help="Quantize Qwen TE to NF4 with BitsAndBytes to save VRAM")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile optimization")
     parser.add_argument(
         "--output_type", type=str, default="video", choices=["video", "latent", "both"], help="Type of output to produce."

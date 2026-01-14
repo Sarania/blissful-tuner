@@ -97,8 +97,10 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
     args = parse_blissful_args(args)
-    if args.nf4_qwen and args.text_encoder_cpu:
-        raise argparse.ArgumentError("Only one of '--nf4_qwen' or '--text_encoder_cpu' may be used at a time but received both!")
+    if args.quantized_qwen and args.text_encoder_cpu:
+        raise argparse.ArgumentError(
+            "Only one of '--quantized_qwen' or '--text_encoder_cpu' may be used at a time but received both!"
+        )
     if args.frames and args.video_length:
         raise argparse.ArgumentError("Only one of '--frames' and '--video_length' is allowed but recieved both!")
 
@@ -198,7 +200,7 @@ def main():
         text_embedder = get_text_embedder(
             text_embedder_conf,
             device=device if not args.text_encoder_cpu else "cpu",
-            quantized_qwen=args.nf4_qwen if not args.text_encoder_cpu else False,
+            quantized_qwen=args.quantized_qwen if not args.text_encoder_cpu else False,
         )
         neg_text = args.negative_prompt or "low quality, bad quality"
         enc_out, _, attention_mask = text_embedder.encode([args.prompt], type_of_content=("video" if frames > 1 else "image"))
@@ -260,9 +262,9 @@ def main():
         with torch.no_grad():
             # --- Stage 2: load DiT, sample latents ---
             loader_args = SimpleNamespace(
-                fp8_base=args.fp8_base,
-                fp8_scaled=args.fp8_scaled,
-                fp8_fast=args.fp8_fast,
+                fp8_base=args.fp8_base if not args.lora_weight else None,  # Postpone fp8 until after LoRA if we have one
+                fp8_scaled=args.fp8_scaled if not args.lora_weight else None,
+                fp8_fast=args.fp8_fast if not args.lora_weight else None,
                 blocks_to_swap=args.blocks_to_swap,
                 disable_numpy_memmap=args.disable_numpy_memmap,
                 override_dit=None,
@@ -293,6 +295,15 @@ def main():
                     net = lora_kandinsky.create_arch_network_from_weights(mult, lora_sd, unet=dit, for_inference=True)
                     net.merge_to(None, dit, lora_sd, device=dit.device if hasattr(dit, "device") else device, non_blocking=True)
                 clean_memory_on_device(device)
+                if args.fp8_base or args.fp8_scaled:
+                    state_dict = dit.state_dict()
+
+                    # if no blocks to swap, we can move the weights to GPU after optimization on GPU (omit redundant CPU->GPU copy)
+                    move_to_device = args.blocks_to_swap == 0  # if blocks_to_swap > 0, we will keep the model on CPU
+                    state_dict = dit.fp8_optimization(state_dict, device, move_to_device, use_scaled_mm=args.fp8_fast)
+
+                    info = dit.load_state_dict(state_dict, strict=True, assign=True)
+                    logger.info(f"Loaded FP8 optimized weights: {info}")
 
             if dit_weight_dtype is not None and dit_weight_dtype != torch.float32:  # Ensure dtype compliance
                 logger.info(f"Casting DiT to {dit_weight_dtype}")

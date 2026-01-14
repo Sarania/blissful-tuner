@@ -28,10 +28,7 @@ from musubi_tuner.kandinsky5.models.utils import fast_sta_nabla
 from musubi_tuner.kandinsky5.generation_utils import get_first_frame_from_image
 from musubi_tuner.kandinsky5.models import attention as k5_attention
 from musubi_tuner.kandinsky5.models import nn as k5_nn
-from musubi_tuner.modules.fp8_optimization_utils import (
-    optimize_state_dict_with_fp8,
-    apply_fp8_monkey_patch,
-)
+from musubi_tuner.modules.fp8_optimization_utils import apply_fp8_monkey_patch
 
 from blissful_tuner.blissful_logger import BlissfulLogger
 from blissful_tuner.utils import ensure_dtype_form
@@ -593,20 +590,11 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             dit_weight_dtype = None
             use_fp8 = False  # skip re-quantization below
         elif use_fp8:
-            # Limit fp8 to the heavy transformer blocks and output layer to reduce slow per-channel fallbacks on small embeddings.
-            # Keep the target set consistent even when block swap is used so all transformer blocks are quantized.
-            target_keys = [
-                "visual_transformer_blocks",
-                "text_transformer_blocks",
-                "out_layer",
-            ]
-            exclude_keys: list[str] = ["norm"]  # skip LayerNorm-like weights to avoid unmatched scale_weight buffers
             logger.info(f"Applying fp8 optimization (scaled={args.fp8_scaled}, base={args.fp8_base}) on {quant_device}")
             # If block swap is disabled, keep weights on GPU for speed; otherwise keep them on CPU to avoid OOM.
             if blocks_to_swap == 0:
                 move_to_device = True
                 fp8_quant_device = quant_device  # GPU quant/keep
-                block_size = 16  # smaller block for better coverage when everything stays on GPU
             else:
                 move_to_device = False
                 # quantize on GPU even when block swap is on, but keep weights on CPU afterwards for swap
@@ -614,22 +602,13 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 logger.info(
                     "blocks_to_swap > 0, quantizing fp8 on GPU and keeping weights on CPU for block swap (all transformer blocks)."
                 )
-                block_size = 32  # larger block to reduce scale tensor size in CPU path
             try:
-                quantization_mode = "block" if not args.fp8_fast else "tensor"
-                logger.info(
-                    f"Using per '{quantization_mode}' quantization mode as scaled_mm/fp8_fast {'is' if args.fp8_fast else 'is not'} enabled"
-                )
-                state_dict = optimize_state_dict_with_fp8(
-                    state_dict,
-                    calc_device=fp8_quant_device,
-                    target_layer_keys=target_keys,
-                    exclude_layer_keys=exclude_keys,
-                    quantization_mode=quantization_mode,
-                    block_size=block_size,
-                    move_to_device=move_to_device,
-                )
-                apply_fp8_monkey_patch(model, state_dict, use_scaled_mm=args.fp8_fast)
+                # if no blocks to swap, we can move the weights to GPU after optimization on GPU (omit redundant CPU->GPU copy)
+                move_to_device = args.blocks_to_swap == 0  # if blocks_to_swap > 0, we will keep the model on CPU
+                state_dict = model.fp8_optimization(state_dict, fp8_quant_device, move_to_device, use_scaled_mm=args.fp8_fast)
+
+                info = model.load_state_dict(state_dict, strict=True, assign=True)
+                logger.info(f"Loaded FP8 optimized weights: {info}")
                 dit_weight_dtype = None
             except Exception as ex:
                 logger.warning(f"fp8 optimization failed ({ex}); proceeding without fp8 for this run.")
