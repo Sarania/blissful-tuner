@@ -42,6 +42,7 @@ class TransformerEncoderBlock(nn.Module):
         self.feed_forward_norm = nn.LayerNorm(model_dim, elementwise_affine=False)
         self.feed_forward = FeedForward(model_dim, ff_dim)
 
+    @_maybe_compile()
     def forward(self, x, time_embed, rope, attention_mask=None):
         self_attn_params, ff_params = torch.chunk(self.text_modulation(time_embed), 2, dim=-1)
         shift, scale, gate = torch.chunk(self_attn_params, 3, dim=-1)
@@ -70,6 +71,7 @@ class TransformerDecoderBlock(nn.Module):
         self.feed_forward_norm = nn.LayerNorm(model_dim, elementwise_affine=False)
         self.feed_forward = FeedForward(model_dim, ff_dim)
 
+    @_maybe_compile()
     def forward(self, visual_embed, text_embed, time_embed, rope, sparse_params, attention_mask=None):
         self_attn_params, cross_attn_params, ff_params = torch.chunk(self.visual_modulation(time_embed), 3, dim=-1)
         shift, scale, gate = torch.chunk(self_attn_params, 3, dim=-1)
@@ -142,7 +144,7 @@ class DiffusionTransformer3D(nn.Module):
         self.gradient_checkpointing = False
         self.activation_cpu_offloading = False
 
-    @_maybe_compile()
+    # @_maybe_compile()
     def before_text_transformer_blocks(self, text_embed, time, pooled_text_embed, x, text_rope_pos):
         text_embed = self.text_embeddings(text_embed)
         time_embed = self.time_embeddings(time)
@@ -156,7 +158,7 @@ class DiffusionTransformer3D(nn.Module):
         text_rope = self.text_rope_embeddings(text_rope_pos)
         return text_embed, time_embed, text_rope, visual_embed
 
-    @_maybe_compile()
+    # @_maybe_compile()
     def before_visual_transformer_blocks(self, visual_embed, visual_rope_pos, scale_factor, sparse_params):
         visual_shape = visual_embed.shape[:-1]
         visual_rope = self.visual_rope_embeddings(visual_shape, visual_rope_pos, scale_factor)
@@ -251,7 +253,7 @@ class DiffusionTransformer3D(nn.Module):
             "text_transformer_blocks",
             "out_layer",
         ]
-        exclude_keys: list[str] = ["norm"]  # skip LayerNorm-like weights to avoid unmatched scale_weight buffers
+        exclude_keys = ["embeddding", "norm"]
         logger.info(
             f"Using per '{quantization_mode}' quantization mode as scaled_mm/fp8_fast {'is' if use_scaled_mm else 'is not'} enabled"
         )
@@ -266,7 +268,7 @@ class DiffusionTransformer3D(nn.Module):
         )
 
         # apply monkey patching
-        apply_fp8_monkey_patch(self, state_dict, use_scaled_mm=use_scaled_mm, exclude_ffn_from_scaled_mm=True)
+        apply_fp8_monkey_patch(self, state_dict, use_scaled_mm=use_scaled_mm, exclude_ffn_from_scaled_mm=False)
 
         return state_dict
 

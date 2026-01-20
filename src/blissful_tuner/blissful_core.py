@@ -543,4 +543,5 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         help="Path to a directory of wildcard.txt files to enable wildcards in prompts and negative prompts. For instance __color__ will look for wildcards in color.txt in that directory. "
         "Wildcard files should have one possible replacement per line, optionally with a relative weight attached like red:2.0 or yellow:0.5, and wildcards can be nested.",
     )
+    parser.add_argument("--no_metadata", action="store_true", help="Disable saving generation params in latent/mkv")
     return parser
