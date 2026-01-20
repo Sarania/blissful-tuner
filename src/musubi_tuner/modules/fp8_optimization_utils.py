@@ -357,7 +357,7 @@ def fp8_linear_forward_patch(self: nn.Linear, x, use_scaled_mm=False, max_value=
     """
     if use_scaled_mm and (
         self.scale_weight.dtype != torch.float32 or self.bias is None
-    ):  # F32 with bias is a no-no in scaled_mm so divert to normal dequantn
+    ):  # F32 with bias is a no-no in scaled_mm so divert to normal dequant
         input_dtype = x.dtype
         original_weight_dtype = self.scale_weight.dtype
         out_dtype = (

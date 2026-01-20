@@ -872,11 +872,6 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             if t_b.dim() > 0:
                 t_b = t_b.flatten()[0]
             t_b = t_b.to(accelerator.device, dtype=network_dtype).unsqueeze(0)
-            if args.gradient_checkpointing:
-                x.requires_grad_(True)
-                text_embed.requires_grad_(True)
-                pooled_embed.requires_grad_(True)
-                t_b.requires_grad_(True)
 
             with accelerator.autocast():
                 model_pred = transformer(
