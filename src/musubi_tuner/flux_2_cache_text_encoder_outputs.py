@@ -5,11 +5,7 @@ import torch
 from musubi_tuner.dataset import config_utils
 from musubi_tuner.dataset.config_utils import BlueprintGenerator, ConfigSanitizer
 
-from musubi_tuner.dataset.image_video_dataset import (
-    ARCHITECTURE_FLUX_2,
-    ItemInfo,
-    save_text_encoder_output_cache_flux_2,
-)
+from musubi_tuner.dataset.image_video_dataset import ItemInfo, save_text_encoder_output_cache_flux_2
 
 from musubi_tuner.flux_2 import flux2_utils
 import musubi_tuner.cache_text_encoder_outputs as cache_text_encoder_outputs
@@ -20,29 +16,16 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-def encode_and_save_batch(
-    text_embedder: torch.nn.Module,
-    guidance_distilled: bool,
-    batch: list[ItemInfo],
-    device: torch.device,
-):
+def encode_and_save_batch(text_embedder: torch.nn.Module, batch: list[ItemInfo], device: torch.device, arch_full: str):
     prompts = [item.caption for item in batch]
-    with torch.autocast(device_type=device.type, dtype=text_embedder.dtype), torch.no_grad():
+    autocast_dtype = torch.bfloat16 if text_embedder.dtype.itemsize == 1 else text_embedder.dtype  # use bfloat16 for fp8 models
+    with torch.autocast(device_type=device.type, dtype=autocast_dtype), torch.no_grad():
         ctx_vec = text_embedder(prompts)
-        ## TODO train with guidance ?
-        # if guidance_distilled:
-        #     ctx_vec = text_embedder(prompts)
-        # else:
-        #     if len(prompts) > 1:
-        #         raise NotImplementedError("Only works with batch size 1")
-        #     ctx_empty = text_embedder([""]).to(torch.bfloat16)
-        #     ctx_prompt = text_embedder(prompts).to(torch.bfloat16)
-        #     ctx_vec = torch.cat([ctx_empty, ctx_prompt], dim=0)
         ctx_vec = ctx_vec.cpu()  # [1, 512, 15360]
 
     # save prompt cache
     for item, _ctx_vec in zip(batch, ctx_vec):
-        save_text_encoder_output_cache_flux_2(item, _ctx_vec)
+        save_text_encoder_output_cache_flux_2(item, _ctx_vec, arch_full=arch_full)
 
 
 def main():
@@ -50,6 +33,7 @@ def main():
     parser = flux_2_setup_parser(parser)
 
     args = parser.parse_args()
+    model_version_info = flux2_utils.FLUX2_MODEL_INFO[args.model_version]
 
     device = args.device if args.device is not None else "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
@@ -58,7 +42,7 @@ def main():
     blueprint_generator = BlueprintGenerator(ConfigSanitizer())
     logger.info(f"Load dataset config from {args.dataset_config}")
     user_config = config_utils.load_user_config(args.dataset_config)
-    blueprint = blueprint_generator.generate(user_config, args, architecture=ARCHITECTURE_FLUX_2)
+    blueprint = blueprint_generator.generate(user_config, args, architecture=model_version_info.architecture)
     train_dataset_group = config_utils.generate_dataset_group_by_blueprint(blueprint.dataset_group)
 
     datasets = train_dataset_group.datasets
@@ -66,27 +50,18 @@ def main():
     # prepare cache files and paths: all_cache_files_for_dataset = exisiting cache files, all_cache_paths_for_dataset = all cache paths in the dataset
     all_cache_files_for_dataset, all_cache_paths_for_dataset = cache_text_encoder_outputs.prepare_cache_files_and_paths(datasets)
 
-    # Load Mistral 3 text encoder
-    m3_dtype = torch.float8e4m3fn if args.fp8_m3 else torch.bfloat16
-    text_embedder = flux2_utils.load_textembedder(
-        args.model_version,
-        args.text_encoder,
-        dtype=m3_dtype,
-        device=device,
-        disable_mmap=True,
+    # Load Mistral 3 or Qwen-3 text encoder
+    m3_dtype = torch.float8_e4m3fn if args.fp8_text_encoder else torch.bfloat16
+    text_embedder = flux2_utils.load_text_embedder(
+        model_version_info, args.text_encoder, dtype=m3_dtype, device=device, disable_mmap=True
     )
 
-    # Encode with Mistral 3 text encoder
-    logger.info("Encoding with Mistral 3 text encoder")
+    # Encode with Mistral 3 or Qwen-3 text encoder
+    logger.info("Encoding with text encoder")
 
     def encode_for_text_encoder(batch: list[ItemInfo]):
         nonlocal text_embedder
-        encode_and_save_batch(
-            text_embedder,
-            flux2_utils.FLUX2_MODEL_INFO[args.model_version]["guidance_distilled"],
-            batch,
-            device,
-        )
+        encode_and_save_batch(text_embedder, batch, device, model_version_info.architecture_full)
 
     cache_text_encoder_outputs.process_text_encoder_batches(
         args.num_workers,
@@ -107,7 +82,7 @@ def main():
 
 def flux_2_setup_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--text_encoder", type=str, default=None, required=True, help="text encoder (mistral 3) checkpoint path")
-    parser.add_argument("--fp8_m3", action="store_true", help="use fp8 for Text Encoder model")
+    parser.add_argument("--fp8_text_encoder", action="store_true", help="use fp8 for Text Encoder model")
     flux2_utils.add_model_version_args(parser)
     return parser
 
