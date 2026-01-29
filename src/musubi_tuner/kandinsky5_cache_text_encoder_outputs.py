@@ -1,6 +1,5 @@
 import os
 from types import SimpleNamespace
-import argparse
 import torch
 
 from musubi_tuner.dataset import config_utils
@@ -106,7 +105,7 @@ def main():
         text_embedder_conf,
         device="cpu" if args.text_encoder_cpu else device,
         quantized_qwen=args.quantized_qwen,
-        qwen_auto=args.text_encoder_auto
+        qwen_auto=args.text_encoder_auto,
     )
 
     def encode_for_text_encoder(batch: list[ItemInfo]):

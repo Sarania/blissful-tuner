@@ -99,7 +99,9 @@ def main():
     args = parse_args()
     args = parse_blissful_args(args)
     if sum([args.text_encoder_cpu, args.quantized_qwen, args.text_encoder_auto]) > 1:
-        raise ValueError("Only one of '--quantized_qwen', '--text_encoder_cpu', '--text_encoder_auto' may be used at a time but received more than that!")
+        raise ValueError(
+            "Only one of '--quantized_qwen', '--text_encoder_cpu', '--text_encoder_auto' may be used at a time but received more than that!"
+        )
     if args.frames and args.video_length:
         raise ValueError("Only one of '--frames' and '--video_length' is allowed but recieved both!")
 
@@ -205,7 +207,7 @@ def main():
             text_embedder_conf,
             device="cpu" if args.text_encoder_cpu else device,
             quantized_qwen=args.quantized_qwen if not args.text_encoder_cpu else False,
-            qwen_auto=args.text_encoder_auto
+            qwen_auto=args.text_encoder_auto,
         )
         neg_text = args.negative_prompt or "low quality, bad quality"
         enc_out, _, attention_mask = text_embedder.encode([args.prompt], type_of_content=("video" if frames > 1 else "image"))
