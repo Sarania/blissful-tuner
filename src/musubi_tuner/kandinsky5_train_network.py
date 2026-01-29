@@ -236,6 +236,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                     text_embedder_conf,
                     device=accelerator.device if not getattr(args, "text_encoder_cpu", False) else "cpu",
                     quantized_qwen=getattr(args, "quantized_qwen", False),
+                    qwen_auto=getattr(args, "text_encoder_auto", False),
                 )
                 # default negative prompt if none provided
                 neg_text = neg_prompt if neg_prompt else "low quality, bad quality"
@@ -467,6 +468,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             text_embedder_conf,
             device=accelerator.device if not getattr(args, "text_encoder_cpu", False) else "cpu",
             quantized_qwen=getattr(args, "quantized_qwen", False),
+            qwen_auto=getattr(args, "text_encoder_cpu", False),
         )
 
         images = generation_utils.generate_sample(
@@ -941,6 +943,7 @@ def kandinsky5_setup_parser(parser: argparse.ArgumentParser) -> argparse.Argumen
     )
     parser.add_argument("--quantized_qwen", action="store_true", help="Load Qwen text encoder in 4bit mode")
     parser.add_argument("--text_encoder_cpu", action="store_true", help="Run Qwen TE on CPU")
+    parser.add_argument("--text_encoder_auto", action="store_true", help="Run Qwen with device_map=auto")
 
     return parser
 
@@ -951,7 +954,10 @@ def main():
 
     args = parser.parse_args()
     args = read_config_from_file(args, parser)
-
+    if sum([args.text_encoder_cpu, args.quantized_qwen, args.text_encoder_auto]) > 1:
+        raise ValueError(
+            "Only one of '--quantized_qwen', '--text_encoder_cpu', '--text_encoder_auto' may be used at a time but received more than that!"
+        )
     # defaults for fp8 flags (not defined in common parser)
     if not hasattr(args, "fp8_base"):
         args.fp8_base = False
