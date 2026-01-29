@@ -468,7 +468,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             text_embedder_conf,
             device=accelerator.device if not getattr(args, "text_encoder_cpu", False) else "cpu",
             quantized_qwen=getattr(args, "quantized_qwen", False),
-            qwen_auto=getattr(args, "text_encoder_cpu", False),
+            qwen_auto=getattr(args, "text_encoder_auto", False),
         )
 
         images = generation_utils.generate_sample(
