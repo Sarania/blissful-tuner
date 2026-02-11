@@ -545,4 +545,9 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         "Wildcard files should have one possible replacement per line, optionally with a relative weight attached like red:2.0 or yellow:0.5, and wildcards can be nested.",
     )
     parser.add_argument("--no_metadata", action="store_true", help="Disable saving generation params in latent/mkv")
+    parser.add_argument(
+        "--less_restrictive_i2v_params",
+        action="store_true",
+        help="Allow much more freedom when preparing latents for I2V i.e. allow any reasonable res which is divisible by 16 without resizing. Not compatible with NABLA",
+    )
     return parser

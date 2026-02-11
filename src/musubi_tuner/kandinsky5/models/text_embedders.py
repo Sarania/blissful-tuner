@@ -44,7 +44,7 @@ class Qwen2_5_VLTextEmbedder:
     PROMPT_TEMPLATE = {
         "template": {
             "video": (
-                "<|im_start|>system\nYou are a promt engineer. Describe the video in detail.",
+                "<|im_start|>system\nYou are a prompt engineer. Describe the video in detail.",
                 "Describe how the camera moves or shakes, describe the zoom and view angle, whether it follows the objects.",
                 "Describe the location of the video, main characters or objects and their action.",
                 "Describe the dynamism of the video and presented actions.",
@@ -54,7 +54,7 @@ class Qwen2_5_VLTextEmbedder:
                 "<|im_start|>user\n{}<|im_end|>",
             ),
             "image2video": (
-                "<|im_start|>system\nYou are a promt engineer. Your task is to create a highly detailed and effective video description based on a provided input image.",
+                "<|im_start|>system\nYou are a prompt engineer. Your task is to create a highly detailed and effective video description based on a provided input image.",
                 "Describe how the camera moves or shakes, describe the zoom and view angle, whether it follows the objects.",
                 "Describe main characters actions.",
                 "Describe the dynamism of the video and presented actions.",
@@ -64,15 +64,15 @@ class Qwen2_5_VLTextEmbedder:
                 "<|im_start|>user\n{}<|im_end|>",
             ),
             "image": (
-                "<|im_start|>system\nYou are a promt engineer. Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>",
+                "<|im_start|>system\nYou are a prompt engineer. Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>",
                 "<|im_start|>user\n{}<|im_end|>",
             ),
             "image_edit": (
-                "<|im_start|>system\nYou are a promt engineer. Based on the provided source image (first image) and target image (second image), create an interesting text prompt that can be used together with the source image to create the target image:<|im_end|>",
+                "<|im_start|>system\nYou are a prompt engineer. Based on the provided source image (first image) and target image (second image), create an interesting text prompt that can be used together with the source image to create the target image:<|im_end|>",
                 "<|im_start|>user\n{}",
             ),
         },
-        "crop_start": {"video": 129, "image": 41, "image_edit": 55, "image2video": 132},
+        "crop_start": {"video": 129, "image": 41, "image_edit": 55, "image2video": 132},  # Deprecated, dynamic now
     }
 
     def __init__(self, conf, device, quantized_qwen=False):
@@ -90,23 +90,66 @@ class Qwen2_5_VLTextEmbedder:
         self.processor = AutoProcessor.from_pretrained(conf.checkpoint_path, use_fast=True)
         self.max_length = conf.max_length
 
-    def __call__(self, texts, images=None, type_of_content="video"):
-        prompt_template = "\n".join(self.PROMPT_TEMPLATE["template"][type_of_content])
-        crop_start = self.PROMPT_TEMPLATE["crop_start"][type_of_content]
-        full_texts = list(map(lambda x: prompt_template.format(x), texts))
+    def __call__(self, texts, images=None, type_of_content="video", use_system=True):
+        if use_system:
+            prompt_template = "\n".join(self.PROMPT_TEMPLATE["template"][type_of_content])
+
+            # Split into prefix/suffix around the user slot
+            if "{}" not in prompt_template:
+                raise ValueError(f"Prompt template for '{type_of_content}' is missing '{{}}' slot.")
+            prefix, suffix = prompt_template.split("{}", 1)
+
+            # Compute crop_start dynamically from tokenized prefix
+            # Prefer tokenizer directly to avoid any processor padding/truncation behavior
+            tok = getattr(self.processor, "tokenizer", None)
+            if tok is None:
+                # Fallback: processor can usually tokenize text-only
+                prefix_ids = self.processor(
+                    text=[prefix],
+                    images=None,
+                    videos=None,
+                    return_tensors="pt",
+                    padding=False,
+                    truncation=False,
+                )["input_ids"][0]
+                crop_start = int(prefix_ids.shape[0])
+            else:
+                prefix_ids = tok(
+                    prefix,
+                    add_special_tokens=False,
+                    padding=False,
+                    truncation=False,
+                    return_tensors="pt",
+                )["input_ids"][0]
+                crop_start = int(prefix_ids.shape[0])
+
+            # Build full texts using the same prefix/suffix
+            full_texts = [prefix + t + suffix for t in texts]
+        else:
+            full_texts = texts
+            crop_start = 0
+
         if type_of_content == "image_edit":
             if images is not None:
                 for i in range(len(images)):
                     image_tokens = "".join(["<|vision_start|><|image_pad|><|vision_end|>"] * len(images[i]))
                     full_texts[i] = full_texts[i] + image_tokens + "<|im_end|>"
                 images = [F.resize(i, (i.shape[-2] // 2, i.shape[-1] // 2)) for i in images]
+
             max_length = (self.max_length + crop_start) if images is None else None
+
             inputs = self.processor(
-                text=full_texts, images=images, truncation=True, return_tensors="pt", padding=True, max_length=max_length
+                text=full_texts,
+                images=images,
+                truncation=True,
+                return_tensors="pt",
+                padding=True,
+                max_length=max_length,
             ).to(self.model.device)
 
             with torch.no_grad():
-                embeds = self.model(**inputs, output_hidden_states=True)["hidden_states"][-1][:, crop_start:]
+                out = self.model(**inputs, output_hidden_states=True)
+                embeds = out["hidden_states"][-1][:, crop_start:]
         else:
             max_length = self.max_length + crop_start
             inputs = self.processor(
@@ -120,30 +163,23 @@ class Qwen2_5_VLTextEmbedder:
             ).to(self.model.device)
 
             with torch.no_grad():
-                embeds = self.model(
+                out = self.model(
                     input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
                     return_dict=True,
                     output_hidden_states=True,
-                )["hidden_states"][-1][:, crop_start:]
+                )
+                embeds = out["hidden_states"][-1][:, crop_start:]
+
         attention_mask = inputs["attention_mask"][:, crop_start:]
-        # variable-length across batch: build cu_seqlens and keep per-sample masks
-        if attention_mask.dim() == 1:
-            valid = attention_mask.bool()
-            embeds = embeds[:, valid].squeeze(0)
-            cu_seqlens = torch.tensor([0, valid.sum().item()], dtype=torch.int32)
-            attention_mask = valid.unsqueeze(0)
-        else:
-            bsz = attention_mask.shape[0]
-            seqlens = attention_mask.sum(1)
-            cu = torch.cumsum(seqlens, dim=0)
-            cu = torch.cat([torch.zeros_like(cu[:1]), cu]).to(dtype=torch.int32)
-            cu_seqlens = cu
-            flat = []
-            for i in range(bsz):
-                flat.append(embeds[i][attention_mask[i].bool()])
-            embeds = torch.cat(flat, dim=0)
-            attention_mask = attention_mask.to(torch.bool)
-        return embeds, cu_seqlens, attention_mask
+
+        # Pack to [T, D] and build cu_seqlens
+        bsz = attention_mask.shape[0]
+        seqlens = attention_mask.sum(1).to(torch.int32)
+        cu_seqlens = torch.cat([torch.zeros(1, dtype=torch.int32, device=seqlens.device), torch.cumsum(seqlens, 0)])
+        embeds = torch.cat([embeds[i][attention_mask[i].bool()] for i in range(bsz)], dim=0)
+
+        return embeds, cu_seqlens
 
     def expand_text_prompt(self, prompt, image, device="cuda"):
         messages = [
@@ -184,16 +220,10 @@ class Kandinsky5TextEmbedder:
         self.clip_embedder = ClipTextEmbedder(conf.clip, device)
         self.conf = conf
 
-    def encode(self, texts, images=None, type_of_content="image"):
-        text_embeds, cu_seqlens, attention_mask = self.embedder(texts, images=images, type_of_content=type_of_content)
+    def encode(self, texts, images=None, type_of_content="image", use_system=True):
+        text_embeds, cu_seqlens = self.embedder(texts, images=images, type_of_content=type_of_content, use_system=use_system)
         pooled_embed = self.clip_embedder(texts)
-        if attention_mask is None:
-            # synthesize a full-attention mask matching current sequence length
-            attn_len = text_embeds.shape[0] if text_embeds.dim() == 2 else text_embeds.shape[1]
-            attention_mask = torch.ones((1, attn_len), dtype=torch.bool, device=text_embeds.device)
-        else:
-            attention_mask = attention_mask.to(torch.bool)
-        return {"text_embeds": text_embeds, "pooled_embed": pooled_embed}, cu_seqlens, attention_mask
+        return {"text_embeds": text_embeds, "pooled_embed": pooled_embed}, cu_seqlens
 
     def to(self, device):
         self.embedder.model = self.embedder.model.to(device)

@@ -7,7 +7,6 @@ import torch
 from PIL import Image
 from torch.distributed import all_gather
 from tqdm import tqdm
-
 from .models.utils import fast_sta_nabla
 import torchvision.transforms.functional as F
 from math import sqrt
@@ -199,8 +198,7 @@ def get_velocity(
     blissful_args=None,
 ):
     do_cfg_for_step = True  # Default true so behavior only altered if blissful args present
-    do_zero_init = False
-    do_zero_scale = False
+    do_zero_init = do_zero_scale = False
     if (
         blissful_args is not None and blissful_args["args"] is not None
     ):  # if args is None we were called from other than generation so skip blissful
@@ -294,45 +292,15 @@ def generate_sample_latents_only(
     g = torch.Generator(device=device)
     g.manual_seed(seed)
     img = torch.randn(bs * duration, height, width, dim, device=device, generator=g, dtype=_GLOBAL_DTYPE)
-
-    # Normalize text shapes; squeeze singleton batch to packed (S, D) when present, reshape/trim masks accordingly.
-    if text_embeds.dim() == 3 and text_embeds.shape[0] == 1:
-        text_embeds = text_embeds.squeeze(0)
-        if attention_mask is not None and attention_mask.dim() > 1:
-            attention_mask = attention_mask.reshape(1, -1)
     seq_len = text_embeds.shape[0] if text_embeds.dim() == 2 else text_embeds.shape[1]
-    if attention_mask is None:
-        attention_mask = torch.ones((1, seq_len), dtype=torch.bool, device=text_embeds.device)
-    if attention_mask.dim() == 1:
-        attention_mask = attention_mask.unsqueeze(0)
-    # trim/pad mask to seq_len
-    if attention_mask.shape[1] > seq_len:
-        attention_mask = attention_mask[:, :seq_len]
-    elif attention_mask.shape[1] < seq_len:
-        pad = seq_len - attention_mask.shape[1]
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, pad), value=True)
 
     if null_text_embeds is None:
         null_text_embeds = torch.zeros_like(text_embeds)
-    if null_text_embeds.dim() == 3 and null_text_embeds.shape[0] == 1:
-        null_text_embeds = null_text_embeds.squeeze(0)
-        if null_attention_mask is not None and null_attention_mask.dim() > 1:
-            null_attention_mask = null_attention_mask.reshape(1, -1)
+
     null_seq_len = null_text_embeds.shape[0] if null_text_embeds.dim() == 2 else null_text_embeds.shape[1]
     if null_pooled_embed is None:
         null_pooled_embed = torch.zeros_like(pooled_embed)
-    if null_attention_mask is None:
-        null_attention_mask = attention_mask
-    if null_attention_mask.dim() == 1:
-        null_attention_mask = null_attention_mask.unsqueeze(0)
-    if null_attention_mask.shape[1] > null_seq_len:
-        null_attention_mask = null_attention_mask[:, :null_seq_len]
-    elif null_attention_mask.shape[1] < null_seq_len:
-        pad = null_seq_len - null_attention_mask.shape[1]
-        null_attention_mask = torch.nn.functional.pad(null_attention_mask, (0, pad), value=True)
 
-    attention_mask = attention_mask.to(device=device, dtype=torch.bool)
-    null_attention_mask = null_attention_mask.to(device=device, dtype=torch.bool)
     text_embeds = text_embeds.to(device=device)
     null_text_embeds = null_text_embeds.to(device=device)
     pooled_embed = pooled_embed.to(device=device)
@@ -442,6 +410,15 @@ def generate(
         tp_world_size = tp_mesh["tensor_parallel"].size()
         img = torch.chunk(img, tp_world_size, dim=1)[tp_rank]
 
+    if first_frames is not None and first_frame_indices is None:
+        n = 1 if first_frames.dim() == 3 else first_frames.shape[0]
+        if n == 1:
+            first_frame_indices = [0]
+        elif n == 2:
+            first_frame_indices = [0, img.shape[0] - 1]
+        else:
+            raise ValueError(f"Expected 1 or 2 conditioning frames, got {n}")
+
     blissful_args["cur_step"] = 0
 
     for timestep, timestep_diff in tqdm(list(zip(timesteps[:-1], torch.diff(timesteps)))):
@@ -454,11 +431,11 @@ def generate(
                 ff = first_frames.to(device=visual_cond.device, dtype=visual_cond.dtype)
                 if ff.dim() == img.dim() - 1:  # H, W, C
                     ff = ff.unsqueeze(0)
-                indices = first_frame_indices or [0]
-                if len(indices) > ff.shape[0]:
+
+                if len(first_frame_indices) > ff.shape[0]:
                     # If fewer frames provided than indices, repeat the last available frame.
-                    ff = torch.cat([ff, ff[-1:].repeat(len(indices) - ff.shape[0], 1, 1, 1)], dim=0)
-                for idx, frame_idx in enumerate(indices):
+                    ff = torch.cat([ff, ff[-1:].repeat(len(first_frame_indices) - ff.shape[0], 1, 1, 1)], dim=0)
+                for idx, frame_idx in enumerate(first_frame_indices):
                     if 0 <= frame_idx < img.shape[0]:
                         img[frame_idx : frame_idx + 1] = ff[idx]
                         visual_cond_mask[frame_idx : frame_idx + 1] = 1
@@ -483,22 +460,36 @@ def generate(
             null_attention_mask=null_attention_mask,
             blissful_args=blissful_args,
         )
+        latent = img[..., : pred_velocity.shape[-1]]  # Slice off extra channels potentially added during i2i edit... maybe
+
         if args is None or args.scheduler == "default":
-            img[..., : pred_velocity.shape[-1]] += timestep_diff * pred_velocity
+            latent += timestep_diff * pred_velocity
         else:
             real_timestep = scheduler.timesteps[blissful_args["cur_step"]]
-            img[..., : pred_velocity.shape[-1]] = scheduler.step(
-                pred_velocity, real_timestep, img[..., : pred_velocity.shape[-1]], return_dict=False
-            )[0]
+            latent = scheduler.step(pred_velocity, real_timestep, latent, return_dict=False)[0]
 
         if previewer is not None:
             previewer.noise_remain += timestep_diff  # Diff is negative so add it to decrease noise_remain
             if args.preview_latent_every is not None and (blissful_args["cur_step"] + 1) % args.preview_latent_every == 0:
                 if blissful_args["cur_step"] < args.steps:
-                    previewer.preview(img[..., : pred_velocity.shape[-1]])
+                    previewer.preview(latent)
 
         blissful_args["cur_step"] += 1
-    return img[..., : pred_velocity.shape[-1]]  # NOTE: Slice is to remove extra channels that can be added in Image Editing (I2I)
+
+    if first_frames is not None:
+        logger.info("i2v post processing")
+        ff = first_frames.to(device=latent.device, dtype=latent.dtype)
+        if ff.dim() == latent.dim() - 1:
+            ff = ff.unsqueeze(0)
+
+        for idx, frame_idx in enumerate(first_frame_indices):
+            if 0 <= frame_idx < latent.shape[0]:
+                src = min(idx, ff.shape[0] - 1)
+                latent[frame_idx : frame_idx + 1] = ff[src : src + 1]
+
+        latent = normalize_first_frame(latent)
+
+    return latent
 
 
 def resize_video(video, visual_size):

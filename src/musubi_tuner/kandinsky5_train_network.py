@@ -240,36 +240,13 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 )
                 # default negative prompt if none provided
                 neg_text = neg_prompt if neg_prompt else "low quality, bad quality"
-                enc_out, _, attention_mask = text_embedder.encode([prompt], type_of_content=("video" if duration > 1 else "image"))
-                neg_out, _, neg_attention_mask = text_embedder.encode(
-                    [neg_text], type_of_content=("video" if duration > 1 else "image")
-                )
+                enc_out, _ = text_embedder.encode([prompt], type_of_content=("video" if duration > 1 else "image"))
+                neg_out, _ = text_embedder.encode([neg_text], type_of_content=("video" if duration > 1 else "image"))
                 text_embeds = enc_out["text_embeds"]
                 pooled_embed = enc_out["pooled_embed"]
                 null_text_embeds = neg_out["text_embeds"]
                 null_pooled_embed = neg_out["pooled_embed"]
-                if attention_mask is not None:
-                    mask = attention_mask[0] if attention_mask.dim() > 1 else attention_mask
-                    mask = mask.bool().flatten()
-                    if mask.shape[0] != text_embeds.shape[0]:
-                        # Processor returns padded masks; embeds are packed to valid tokens.
-                        # Don't raise here: cache writing already aligns masks to packed embeds.
-                        if mask.sum().item() == text_embeds.shape[0]:
-                            mask = mask[mask]
-                        else:
-                            mask = torch.ones((text_embeds.shape[0],), dtype=torch.bool)
-                    text_embeds = text_embeds[mask]
-                    attention_mask = None
-                if neg_attention_mask is not None:
-                    mask = neg_attention_mask[0] if neg_attention_mask.dim() > 1 else neg_attention_mask
-                    mask = mask.bool().flatten()
-                    if mask.shape[0] != null_text_embeds.shape[0]:
-                        if mask.sum().item() == null_text_embeds.shape[0]:
-                            mask = mask[mask]
-                        else:
-                            mask = torch.ones((null_text_embeds.shape[0],), dtype=torch.bool)
-                    null_text_embeds = null_text_embeds[mask]
-                    neg_attention_mask = None
+
                 # move encoder off GPU promptly
                 try:
                     text_embedder.to("cpu")
@@ -343,10 +320,10 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                         dit=transformer,
                         text_embeds=text_embeds,
                         pooled_embed=pooled_embed,
-                        attention_mask=attention_mask,
+                        attention_mask=None,
                         null_text_embeds=null_text_embeds,
                         null_pooled_embed=null_pooled_embed,
-                        null_attention_mask=neg_attention_mask,
+                        null_attention_mask=None,
                         first_frames=first_frames,
                         num_steps=steps_to_use,
                         guidance_weight=guidance,
@@ -630,65 +607,6 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         model.dtype = next(model.parameters()).dtype  # align hv_train_network logging expectation
         model.device = target_device  # align hv_train_network logging expectation
 
-        # # Ensure norm params are not fp8 (fp8 norms trigger unsupported ops).
-        # import torch.nn as nn  # local import to avoid cyclic issues
-
-        # def _upcast_stable_params(m: nn.Module):
-        #     # Keep numerically sensitive pieces in float32.
-        #     for name, p in m.named_parameters(recurse=False):
-        #         if any(key in name for key in ["embedding", "embeddings", "rope"]):
-        #             p.data = p.data.to(torch.float32)
-        #         if isinstance(m, (nn.LayerNorm, getattr(nn, "RMSNorm", nn.LayerNorm))):
-        #             p.data = p.data.to(torch.float32)
-        #     for name, b in m.named_buffers(recurse=False):
-        #         if isinstance(b, torch.Tensor) and any(key in name for key in ["embedding", "embeddings", "rope"]):
-        #             setattr(m, name, b.to(torch.float32))
-
-        # cast_dtype = dit_weight_dtype if dit_weight_dtype is not None else torch.bfloat16
-
-        # for mod in model.modules():
-        #     if isinstance(mod, (nn.LayerNorm, getattr(nn, "RMSNorm", nn.LayerNorm))):
-        #         if hasattr(mod, "weight") and isinstance(mod.weight, torch.Tensor):
-        #             mod.weight.data = mod.weight.data.to(cast_dtype)
-        #         if hasattr(mod, "bias") and isinstance(mod.bias, torch.Tensor) and mod.bias is not None:
-        #             mod.bias.data = mod.bias.data.to(cast_dtype)
-        #     _upcast_stable_params(mod)
-        # for name, param in model.named_parameters():
-        #     if "norm" in name:
-        #         param.data = param.data.to(cast_dtype)
-
-        # Cast any stray fp8 params/buffers outside Linear fp8 modules back to bf16 to avoid unsupported ops.
-        # for mod in model.modules():
-        #     is_fp8_linear = isinstance(mod, nn.Linear) and hasattr(mod, "scale_weight")
-        #     if not is_fp8_linear:
-        #         for p in mod.parameters(recurse=False):
-        #             if p.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
-        #                 p.data = p.data.to(cast_dtype)
-        #         for b_name, b in mod.named_buffers(recurse=False):
-        #             if isinstance(b, torch.Tensor) and b.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
-        #                 setattr(mod, b_name, b.to(cast_dtype))
-
-        # # Ensure fp8 linears use safe dequant (float32 scale/weight) to avoid unsupported float8 ops.
-        # for name, module in model.named_modules():
-        #     if isinstance(module, torch.nn.Linear) and hasattr(module, "scale_weight"):
-        #         module.scale_weight = module.scale_weight.to(torch.float32)
-
-        #         def _safe_forward(self, x):
-        #             target_device = x.device
-        #             weight = self.weight.to(device=target_device, dtype=torch.float32)
-        #             scale = self.scale_weight.to(device=target_device, dtype=torch.float32)
-        #             if scale.ndim < 3:
-        #                 w = weight * scale
-        #             else:
-        #                 out_features, num_blocks, _ = scale.shape
-        #                 w = weight.contiguous().view(out_features, num_blocks, -1)
-        #                 w = w * scale
-        #                 w = w.view(self.weight.shape)
-        #             bias = self.bias.to(target_device) if self.bias is not None else None
-        #             out = F.linear(x, w, bias)
-        #             return out.to(x.dtype)
-
-        #         module.forward = _safe_forward.__get__(module, type(module))
         if getattr(args, "compile", False):
             model = self.compile_transformer(args, model)
         return model
@@ -701,13 +619,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         k5_nn.activate_compile(
             mode=args.compile_mode, backend=args.compile_backend, fullgraph=args.compile_fullgraph, dynamic=args.compile_dynamic
         )
-        return transformer  # Compile handled at module level
-        # return model_utils.compile_transformer(
-        #     args,
-        #     transformer,
-        #     [transformer.text_transformer_blocks, transformer.visual_transformer_blocks],
-        #     disable_linear=self.blocks_to_swap > 0,
-        # )
+        return transformer
 
     def scale_shift_latents(self, latents):
         # Latents were scaled during caching; avoid re-scaling during training.

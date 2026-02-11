@@ -76,7 +76,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", type=str, default=None, choices=[None, "bfloat16", "float16", "float32"])
     parser.add_argument("--vae_dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"])
     parser.add_argument("--blocks_to_swap", type=int, default=0)
-    parser.add_argument("--offload_dit_during_sampling", action="store_true")
     parser.add_argument("--fp8_base", action="store_true")
     parser.add_argument("--fp8_scaled", action="store_true")
     parser.add_argument("--fp8_fast", action="store_true")
@@ -132,25 +131,28 @@ def main():
     elif args.force_nabla_attn:
         if task_conf.attention.type != "nabla":
             logger.info("Overriding attention backend to NABLA!")
-            task_conf.attention = (
-                AttentionConfig(
-                    type="nabla",
-                    chunk=False,
-                    causal=False,
-                    local=False,
-                    glob=False,
-                    window=3,
-                    method="topcdf",
-                    P=args.nabla_p,
-                    add_sta=True,
-                    wT=11,
-                    wH=3,
-                    wW=3,
-                ),
+            task_conf.attention = AttentionConfig(
+                type="nabla",
+                chunk=False,
+                causal=False,
+                local=False,
+                glob=False,
+                window=3,
+                method="topcdf",
+                P=args.nabla_p,
+                add_sta=True,
+                wT=11,
+                wH=3,
+                wW=3,
             )
         else:
             logger.warning("Requested forced NABLA but task type already defaults to NABLA!")
     device = _get_device(args.device)
+
+    if args.less_restrictive_i2v_params and task_conf.attention.type == "nabla":
+        raise ValueError(
+            "Cannot allow --less_restrictive_i2v_params when nabla attention is enabled! Consider using '--force_traditional_attn' to disable it completely when using this mode."
+        )
 
     width = args.width or task_conf.resolution
     height = args.height or task_conf.resolution
@@ -210,45 +212,20 @@ def main():
             qwen_auto=args.text_encoder_auto,
         )
         neg_text = args.negative_prompt or "low quality, bad quality"
-        enc_out, _, attention_mask = text_embedder.encode([args.prompt], type_of_content=("video" if frames > 1 else "image"))
-        neg_out, _, neg_attention_mask = text_embedder.encode([neg_text], type_of_content=("video" if frames > 1 else "image"))
+        enc_out, _ = text_embedder.encode([args.prompt], type_of_content=("video" if frames > 1 else "image"), use_system=True)
+        neg_out, _ = text_embedder.encode([neg_text], type_of_content=("video" if frames > 1 else "image"), use_system=True)
         text_embeds = enc_out["text_embeds"].to("cpu")
         pooled_embed = enc_out["pooled_embed"].to("cpu")
         null_text_embeds = neg_out["text_embeds"].to("cpu")
         null_pooled_embed = neg_out["pooled_embed"].to("cpu")
-        if attention_mask is not None:
-            attention_mask = attention_mask.to("cpu")
-        if neg_attention_mask is not None:
-            neg_attention_mask = neg_attention_mask.to("cpu")
-        if attention_mask is not None:
-            mask = attention_mask[0] if attention_mask.dim() > 1 else attention_mask
-            mask = mask.bool().flatten()
-            if mask.shape[0] != text_embeds.shape[0]:
-                # Processor returns padded masks; embeds are packed to valid tokens.
-                if mask.sum().item() == text_embeds.shape[0]:
-                    mask = mask[mask]
-                else:
-                    mask = torch.ones((text_embeds.shape[0],), dtype=torch.bool)
-            text_embeds = text_embeds[mask]
-            attention_mask = None
-        if neg_attention_mask is not None:
-            mask = neg_attention_mask[0] if neg_attention_mask.dim() > 1 else neg_attention_mask
-            mask = mask.bool().flatten()
-            if mask.shape[0] != null_text_embeds.shape[0]:
-                # Processor returns padded masks; embeds are packed to valid tokens.
-                if mask.sum().item() == null_text_embeds.shape[0]:
-                    mask = mask[mask]
-                else:
-                    mask = torch.ones((null_text_embeds.shape[0],), dtype=torch.bool)
-            null_text_embeds = null_text_embeds[mask]
-            neg_attention_mask = None
+
         try:
             text_embedder.to("cpu")
         except Exception:
             pass
         del text_embedder
         clean_memory_on_device(device)
-        # Blissful
+
         scale_per_step = None
         if args.cfg_schedule is not None:
             scale_per_step = parse_scheduled_cfg(args.cfg_schedule, steps, guidance)
@@ -263,179 +240,178 @@ def main():
             torch.set_float32_matmul_precision("high")
             torch.backends.cudnn.conv.fp32_precision = "tf32"
             torch.backends.cuda.matmul.fp32_precision = "tf32"
-        dit_weight_dtype = None if args.fp8_base or args.fp8_scaled else ensure_dtype_form(args.dtype, out_form="torch")
-        conf_ns = SimpleNamespace(model=task_conf, metrics=SimpleNamespace(scale_factor=task_conf.scale_factor))
 
-        with torch.no_grad():
-            # --- Stage 2: load DiT, sample latents ---
-            loader_args = SimpleNamespace(
-                fp8_base=args.fp8_base if not args.lora_weight else None,  # Postpone fp8 until after LoRA if we have one
-                fp8_scaled=args.fp8_scaled if not args.lora_weight else None,
-                fp8_fast=args.fp8_fast if not args.lora_weight else None,
-                blocks_to_swap=args.blocks_to_swap,
-                disable_numpy_memmap=args.disable_numpy_memmap,
-                override_dit=None,
-                sdpa=args.sdpa,
-                flash_attn=args.flash_attn,
-                flash3=args.flash3,
-                sage_attn=args.sage_attn,
-                xformers=args.xformers,
-            )
-            accel_stub = SimpleNamespace(device=device)
-            dit = trainer.load_transformer(
-                accelerator=accel_stub,
-                args=loader_args,
-                dit_path=dit_path,
-                attn_mode=task_conf.attention.type,
-                split_attn=False,
-                loading_device=device,
-                dit_weight_dtype=dit_weight_dtype,
-            )
-            dit.eval()
-            dit.requires_grad_(False)
-
-            # Merge LoRA weights before any casting/offloading.
-            if args.lora_weight is not None and len(args.lora_weight) > 0:
-                for idx, lora_path in enumerate(args.lora_weight):
-                    mult = args.lora_multiplier[idx] if args.lora_multiplier and len(args.lora_multiplier) > idx else 1.0
-                    lora_sd = load_file(lora_path)
-                    net = lora_kandinsky.create_arch_network_from_weights(mult, lora_sd, unet=dit, for_inference=True)
-                    net.merge_to(None, dit, lora_sd, device=dit.device if hasattr(dit, "device") else device, non_blocking=True)
-                clean_memory_on_device(device)
-                if args.fp8_base or args.fp8_scaled:
-                    state_dict = dit.state_dict()
-
-                    # if no blocks to swap, we can move the weights to GPU after optimization on GPU (omit redundant CPU->GPU copy)
-                    move_to_device = args.blocks_to_swap == 0  # if blocks_to_swap > 0, we will keep the model on CPU
-                    state_dict = dit.fp8_optimization(state_dict, device, move_to_device, use_scaled_mm=args.fp8_fast)
-
-                    info = dit.load_state_dict(state_dict, strict=True, assign=True)
-                    logger.info(f"Loaded FP8 optimized weights: {info}")
-
-            if dit_weight_dtype is not None and dit_weight_dtype != torch.float32:  # Ensure dtype compliance
-                logger.info(f"Casting DiT to {dit_weight_dtype}")
-                dit.to(dit_weight_dtype)
-                dit.dtype = dit_weight_dtype
-
-            if args.blocks_to_swap and args.blocks_to_swap > 0:
-                dit.enable_block_swap(args.blocks_to_swap, device, supports_backward=False, use_pinned_memory=False)
-                dit.move_to_device_except_swap_blocks(device)
-
-            if hasattr(dit, "switch_block_swap_for_inference"):
-                dit.switch_block_swap_for_inference()
-
-            if dit_weight_dtype is not None and dit_weight_dtype != torch.float32:
-                autocast_dtype = dit_weight_dtype if device.type == "cuda" else None
-            else:
-                autocast_dtype = torch.bfloat16 if not args.fp16_accumulation else torch.float16
-
-            if autocast_dtype is not None:
-                set_global_dtype(autocast_dtype)
-            blissful_args = {"scale_per_step": scale_per_step, "args": args}
-            if args.fp16_accumulation:
-                logger.info("Enabling fp16 accumulation and switching autocast to float16 for maximum performance.")
-                torch.backends.cuda.matmul.allow_fp16_accumulation = True
-
-            transformer_offloaded = args.offload_dit_during_sampling and device.type == "cuda"
-            original_device = device
-
-            if transformer_offloaded:
-                dit.to("cpu")
-                torch.cuda.empty_cache()
-            if args.cfgzerostar_scaling or args.cfgzerostar_init_steps != -1:
-                logger.info(
-                    f"Using CFGZero* - Scaling: {args.cfgzerostar_scaling}; Zero init steps: {'None' if args.cfgzerostar_init_steps == -1 else args.cfgzerostar_init_steps}"
+        # Prepare I2V
+        first_frames = None
+        # Optional init image(s) -> latent first/last frames (i2v-style). Requires temporary VAE load.
+        if args.image:
+            vae_for_encode = trainer._load_vae_for_sampling(args, device=device)
+            try:
+                max_area = (
+                    2048 * 2048
+                    if args.less_restrictive_i2v_params
+                    else 512 * 768
+                    if int(task_conf.resolution) == 512
+                    else 1024 * 1024
                 )
-            first_frames = None
-            # Optional init image(s) -> latent first/last frames (i2v-style). Requires temporary VAE load.
-            if args.image:
-                vae_for_encode = trainer._load_vae_for_sampling(args, device=device)
-                try:
-                    max_area = 512 * 768 if int(task_conf.resolution) == 512 else 1024 * 1024
-                    divisibility = 16 if int(task_conf.resolution) == 512 else 128
-                    # Always encode the first image
-                    _, lat_image_first, _ = get_first_frame_from_image(
-                        args.image,
+                divisibility = 16 if args.less_restrictive_i2v_params or int(task_conf.resolution) == 512 else 128
+                # Always encode the first image
+                _, lat_image_first, _ = get_first_frame_from_image(
+                    args.image,
+                    vae_for_encode,
+                    device,
+                    max_area=max_area,
+                    divisibility=divisibility,
+                )
+                frame_list = [lat_image_first[:1]]
+                # Optionally encode the last image
+                if args.image_last:
+                    _, lat_image_last, _ = get_first_frame_from_image(
+                        args.image_last,
                         vae_for_encode,
                         device,
                         max_area=max_area,
                         divisibility=divisibility,
                     )
-                    frame_list = [lat_image_first[:1]]
-                    # Optionally encode the last image
-                    if args.image_last:
-                        _, lat_image_last, _ = get_first_frame_from_image(
-                            args.image_last,
-                            vae_for_encode,
-                            device,
-                            max_area=max_area,
-                            divisibility=divisibility,
-                        )
-                        frame_list.append(lat_image_last[:1])
-                    first_frames = torch.cat(frame_list, dim=0)
-                    # If the init image was resized by the encoder, match sampling shape to it.
-                    if first_frames is not None:
-                        latent_h = int(first_frames.shape[1])
-                        latent_w = int(first_frames.shape[2])
-                        shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
-                finally:
-                    try:
-                        vae_for_encode.to("cpu")
-                    except Exception:
-                        pass
-                    del vae_for_encode
-                    clean_memory_on_device(device)
-
-            if transformer_offloaded:
-                if hasattr(dit, "move_to_device_except_swap_blocks"):
-                    dit.move_to_device_except_swap_blocks(original_device)
-                else:
-                    dit.to(original_device)
-                torch.cuda.empty_cache()
-            if hasattr(dit, "prepare_block_swap_before_forward"):
-                dit.prepare_block_swap_before_forward()
-            logger.info(f"DiT dtype: {dit.dtype}; Autocast dtype: {autocast_dtype}")
-            with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=autocast_dtype is not None), torch.no_grad():
-                latents = generate_sample_latents_only(
-                    shape=shape,
-                    dit=dit,
-                    text_embeds=text_embeds,
-                    pooled_embed=pooled_embed,
-                    attention_mask=attention_mask,
-                    null_text_embeds=null_text_embeds,
-                    null_pooled_embed=null_pooled_embed,
-                    null_attention_mask=neg_attention_mask,
-                    first_frames=first_frames,
-                    num_steps=steps,
-                    guidance_weight=guidance,
-                    scheduler_scale=scheduler_scale,
-                    seed=args.seed,
-                    device=device,
-                    conf=conf_ns,
-                    progress=True,
-                    i2v_mode=i2v_mode,
-                    blissful_args=blissful_args,
-                )
-            # free DiT
-            dit.to("cpu")
-            del dit
-            clean_memory_on_device(device)
-            time_flag = get_time_flag()
-
-            # --- Stage 3: load VAE, decode ---
-            if args.output_type in ["latent", "both"]:
-                latent_path = f"{args.save_path}/{time_flag}_{args.seed}_latent.safetensors"
-                logger.info(f"Save latent to {latent_path}!")
-                sd = {"latent": latents}
-                save_file(sd, latent_path, metadata=metadata)
-            if args.output_type in ["video", "both"]:
-                vae = trainer._load_vae_for_sampling(args, device=device)
-                images = decode_latents(latents, vae, device=device, batch_size=shape[0], num_frames=frames)
+                    frame_list.append(lat_image_last[:1])
+                first_frames = torch.cat(frame_list, dim=0)
+                # If the init image was resized by the encoder, match sampling shape to it.
+                if first_frames is not None:
+                    latent_h = int(first_frames.shape[1])
+                    latent_w = int(first_frames.shape[2])
+                    width = latent_w * 8
+                    height = latent_h * 8
+                    shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
+                    logger.info(f"I2V updated resolution (W*H) to: {width}x{height}, latent: {latent_w}x{latent_h}")
+            finally:
                 try:
-                    vae.to("cpu")
+                    vae_for_encode.to("cpu")
                 except Exception:
                     pass
-                del vae
+                del vae_for_encode
+                clean_memory_on_device(device)
+        dit_weight_dtype = None if args.fp8_base or args.fp8_scaled else ensure_dtype_form(args.dtype, out_form="torch")
+        conf_ns = SimpleNamespace(model=task_conf, metrics=SimpleNamespace(scale_factor=task_conf.scale_factor))
+
+        # --- Stage 2: load DiT, sample latents ---
+        loader_args = SimpleNamespace(
+            fp8_base=args.fp8_base if not args.lora_weight else None,  # Postpone fp8 until after LoRA if we have one
+            fp8_scaled=args.fp8_scaled if not args.lora_weight else None,
+            fp8_fast=args.fp8_fast if not args.lora_weight else None,
+            blocks_to_swap=args.blocks_to_swap,
+            disable_numpy_memmap=args.disable_numpy_memmap,
+            override_dit=None,
+            sdpa=args.sdpa,
+            flash_attn=args.flash_attn,
+            flash3=args.flash3,
+            sage_attn=args.sage_attn,
+            xformers=args.xformers,
+        )
+        accel_stub = SimpleNamespace(device=device)
+        dit = trainer.load_transformer(
+            accelerator=accel_stub,
+            args=loader_args,
+            dit_path=dit_path,
+            attn_mode=task_conf.attention.type,
+            split_attn=False,
+            loading_device=device,
+            dit_weight_dtype=dit_weight_dtype,
+        )
+        dit.eval()
+        dit.requires_grad_(False)
+
+        # Merge LoRA weights before any casting/offloading.
+        if args.lora_weight is not None and len(args.lora_weight) > 0:
+            for idx, lora_path in enumerate(args.lora_weight):
+                mult = args.lora_multiplier[idx] if args.lora_multiplier and len(args.lora_multiplier) > idx else 1.0
+                lora_sd = load_file(lora_path)
+                net = lora_kandinsky.create_arch_network_from_weights(mult, lora_sd, unet=dit, for_inference=True)
+                net.merge_to(None, dit, lora_sd, device=dit.device if hasattr(dit, "device") else device, non_blocking=True)
+            clean_memory_on_device(device)
+            if args.fp8_base or args.fp8_scaled:
+                state_dict = dit.state_dict()
+
+                # if no blocks to swap, we can move the weights to GPU after optimization on GPU (omit redundant CPU->GPU copy)
+                move_to_device = args.blocks_to_swap == 0  # if blocks_to_swap > 0, we will keep the model on CPU
+                state_dict = dit.fp8_optimization(state_dict, device, move_to_device, use_scaled_mm=args.fp8_fast)
+
+                info = dit.load_state_dict(state_dict, strict=True, assign=True)
+                logger.info(f"Loaded FP8 optimized weights: {info}")
+
+        if dit_weight_dtype is not None and dit_weight_dtype != torch.float32:  # Ensure dtype compliance
+            logger.info(f"Casting DiT to {dit_weight_dtype}")
+            dit.to(dit_weight_dtype)
+            dit.dtype = dit_weight_dtype
+
+        if args.blocks_to_swap > 0:
+            dit.enable_block_swap(args.blocks_to_swap, device, supports_backward=False, use_pinned_memory=False)
+            dit.move_to_device_except_swap_blocks(device)
+            dit.prepare_block_swap_before_forward()
+
+        if dit_weight_dtype is not None and dit_weight_dtype != torch.float32:
+            autocast_dtype = dit_weight_dtype if device.type == "cuda" else None
+        else:
+            autocast_dtype = torch.float16 if args.fp16_accumulation and not args.fp8_fast else torch.bfloat16
+
+        if autocast_dtype is not None:
+            set_global_dtype(autocast_dtype)
+
+        blissful_args = {"scale_per_step": scale_per_step, "args": args}
+
+        if args.fp16_accumulation:
+            logger.info(
+                f"Enabling fp16 accumulation{' and switching autocast to float16 for maximum performance' if autocast_dtype == torch.float16 else ''}."
+            )
+            torch.backends.cuda.matmul.allow_fp16_accumulation = True
+
+        if args.cfgzerostar_scaling or args.cfgzerostar_init_steps != -1:
+            logger.info(
+                f"Using CFGZero* - Scaling: {args.cfgzerostar_scaling}; Zero init steps: {'None' if args.cfgzerostar_init_steps == -1 else args.cfgzerostar_init_steps}"
+            )
+
+        logger.info(f"DiT dtype: {dit.dtype}; Autocast dtype: {autocast_dtype}")
+
+        with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=autocast_dtype is not None), torch.no_grad():
+            latents = generate_sample_latents_only(
+                shape=shape,
+                dit=dit,
+                text_embeds=text_embeds,
+                pooled_embed=pooled_embed,
+                attention_mask=None,
+                null_text_embeds=null_text_embeds,
+                null_pooled_embed=null_pooled_embed,
+                null_attention_mask=None,
+                first_frames=first_frames,
+                num_steps=steps,
+                guidance_weight=guidance,
+                scheduler_scale=scheduler_scale,
+                seed=args.seed,
+                device=device,
+                conf=conf_ns,
+                progress=True,
+                i2v_mode=i2v_mode,
+                blissful_args=blissful_args,
+            )
+        # free DiT
+        dit.to("cpu")
+        del dit
+        clean_memory_on_device(device)
+        time_flag = get_time_flag()
+
+        # --- Stage 3: load VAE, decode ---
+        if args.output_type in ["latent", "both"]:
+            latent_path = f"{args.save_path}/{time_flag}_{args.seed}_latent.safetensors"
+            logger.info(f"Save latent to {latent_path}!")
+            sd = {"latent": latents}
+            save_file(sd, latent_path, metadata=metadata)
+        if args.output_type in ["video", "both"]:
+            vae = trainer._load_vae_for_sampling(args, device=device)
+            images = decode_latents(latents, vae, device=device, batch_size=shape[0], num_frames=frames)
+            try:
+                vae.to("cpu")
+            except Exception:
+                pass
+            del vae
         clean_memory_on_device(device)
     # Save
     if args.output_type != "latent":

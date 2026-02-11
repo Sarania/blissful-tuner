@@ -144,7 +144,6 @@ class DiffusionTransformer3D(nn.Module):
         self.gradient_checkpointing = False
         self.activation_cpu_offloading = False
 
-    # @_maybe_compile()
     def before_text_transformer_blocks(self, text_embed, time, pooled_text_embed, x, text_rope_pos):
         text_embed = self.text_embeddings(text_embed)
         time_embed = self.time_embeddings(time)
@@ -158,7 +157,6 @@ class DiffusionTransformer3D(nn.Module):
         text_rope = self.text_rope_embeddings(text_rope_pos)
         return text_embed, time_embed, text_rope, visual_embed
 
-    # @_maybe_compile()
     def before_visual_transformer_blocks(self, visual_embed, visual_rope_pos, scale_factor, sparse_params):
         visual_shape = visual_embed.shape[:-1]
         visual_rope = self.visual_rope_embeddings(visual_shape, visual_rope_pos, scale_factor)
@@ -278,9 +276,9 @@ class DiffusionTransformer3D(nn.Module):
         if num_blocks <= 0:
             return
 
-        text_to_swap = max(0, min(self.num_text_blocks // 2, num_blocks // 4))
+        text_to_swap = max(0, min(self.num_text_blocks - 1, num_blocks // 4))
         visual_to_swap = max(1, num_blocks - text_to_swap)
-        visual_to_swap = min(visual_to_swap, self.num_visual_blocks - 2)
+        visual_to_swap = min(visual_to_swap, self.num_visual_blocks - 1)
 
         if text_to_swap > 0:
             self.offloader_text = ModelOffloader(

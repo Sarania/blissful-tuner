@@ -39,31 +39,33 @@ def _ensure_cache_architecture(item: ItemInfo):
 def encode_and_save_batch(text_embedder, batch: list[ItemInfo], device: torch.device):
     prompts = [item.caption for item in batch]
     # Keep the cache encoder aligned with training/inference: use video template when the batch contains videos.
-    is_video_batch = any((item.frame_count or 1) > 1 for item in batch)
+    # This originally checked item.frame_count to tell the difference but it's None here, so check by filename seems best we can do - BS
+    video_exts = (".mp4", ".mkv", ".webm", ".avi", ".mov")
+
+    is_video_batch = any(item.item_key.lower().endswith(video_exts) for item in batch)
+
     content_type = "video" if is_video_batch else "image"
-    embeds, cu_seqlens, attention_mask = text_embedder.encode(prompts, type_of_content=content_type)
+    embeds, cu_seqlens = text_embedder.encode(prompts, type_of_content=content_type)
 
     text_embeds = embeds["text_embeds"].to("cpu")
     pooled_embed = embeds["pooled_embed"].to("cpu")
-    attention_mask = attention_mask.to("cpu")
 
-    if text_embeds.dim() == 2 and attention_mask.dim() == 2 and cu_seqlens is not None and cu_seqlens.numel() == len(batch) + 1:
-        # Variable-length packed embeds: slice by cu_seqlens per item.
+    # If we packed(which we did), attention_mask should be None.
+    # For caching, synthesize an all-True mask per item to satisfy any future requirements.
+    if text_embeds.dim() == 2 and cu_seqlens is not None and cu_seqlens.numel() == len(batch) + 1:
         for idx, item in enumerate(batch):
             start = int(cu_seqlens[idx].item())
             end = int(cu_seqlens[idx + 1].item())
             te = text_embeds[start:end]
             pe = pooled_embed[idx]
-            am = attention_mask[idx].bool().flatten()
-            if am.numel() != te.shape[0]:
-                if am.sum().item() == te.shape[0]:
-                    am = am[am]
-                else:
-                    am = torch.ones((te.shape[0],), dtype=torch.bool)
+            am = torch.ones((te.shape[0],), dtype=torch.bool)  # packed => all valid
             _ensure_cache_architecture(item)
             save_text_encoder_output_cache_kandinsky5(item, te, pe, am)
     else:
-        # Fallback: per-item tensors already aligned on batch dim.
+        # te is [B, S, D] here, so full True mask matches S
+        attention_mask = torch.ones((text_embeds.shape[0], text_embeds.shape[1]), dtype=torch.bool)
+
+        # now write per item
         for item, te, pe, am in zip(batch, text_embeds, pooled_embed, attention_mask):
             _ensure_cache_architecture(item)
             save_text_encoder_output_cache_kandinsky5(item, te, pe, am)
