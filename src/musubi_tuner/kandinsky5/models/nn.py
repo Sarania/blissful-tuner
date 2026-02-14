@@ -42,6 +42,9 @@ def _maybe_compile(fn=None, **compile_kwargs):
 
 
 def activate_compile(backend="inductor", mode="default", fullgraph=False, dynamic=None):
+    from musubi_tuner.kandinsky5.models.attention import activate_compile as ac_attn
+
+    ac_attn(backend, mode, fullgraph, dynamic)
     if not hasattr(_maybe_compile, "compile_targets"):
         return
 
@@ -62,7 +65,7 @@ def apply_scale_shift_norm(norm, x, scale, shift):
 @_maybe_compile()
 @torch.autocast(device_type="cuda", dtype=torch.float32)
 def apply_gate_sum(x, out, gate):
-    return (x + gate * out).to(_GLOBAL_DTYPE)
+    return (x + gate * out).to(torch.bfloat16)  # float16 here will cause lite and image model to produce black output
 
 
 @_maybe_compile()

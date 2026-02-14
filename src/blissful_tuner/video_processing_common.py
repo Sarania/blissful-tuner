@@ -102,6 +102,7 @@ class BlissfulVideoProcessor:
         codec: str = "prores",
         container: str = "mkv",
         overwrite_all: bool = False,
+        image_only: bool = False,
     ) -> Tuple[str, str]:
         """
         Determine and confirm input/output paths, generating a default output
@@ -126,22 +127,28 @@ class BlissfulVideoProcessor:
             except (UnidentifiedImageError, OSError):
                 return False
 
-        if codec is not None:
-            if codec.lower() in ["prores", "h264", "h265"]:
-                self.codec = codec.lower()
-            else:
-                raise ValueError("Invalid codec requested {codec}! Expected 'prores', 'h264', or 'h265'!")
-        if container is not None:
-            if container.lower() == "mkv":
-                self.new_ext = ".mkv"
-            elif container.lower() == "mp4":
-                if self.codec != "prores":
-                    self.new_ext = ".mp4"
+        if not image_only:
+            if codec is not None:
+                if codec.lower() in ["prores", "h264", "h265"]:
+                    self.codec = codec.lower()
                 else:
-                    if self.will_write_video:
-                        logger.warning("Prores can only be written into an mkv but mp4 was passed! Selecting mkv and continuing...")
-            else:
-                raise ValueError("Invalid container format {container}! Expected 'mkv' or 'mp4'!")
+                    raise ValueError("Invalid codec requested {codec}! Expected 'prores', 'h264', or 'h265'!")
+            if container is not None:
+                if container.lower() == "mkv":
+                    self.new_ext = ".mkv"
+                elif container.lower() == "mp4":
+                    if self.codec != "prores":
+                        self.new_ext = ".mp4"
+                    else:
+                        if self.will_write_video:
+                            logger.warning(
+                                "Prores can only be written into an mkv but mp4 was passed! Selecting mkv and continuing..."
+                            )
+                else:
+                    raise ValueError("Invalid container format {container}! Expected 'mkv' or 'mp4'!")
+        else:
+            self.codec = "png"
+            self.new_ext = ".png"
         if input_file_path is not None:
             basename = os.path.basename(input_file_path)
             name, _ = os.path.splitext(basename)
@@ -164,7 +171,7 @@ class BlissfulVideoProcessor:
             o_basename = os.path.basename(output_file_path)
             o_name, o_ext = os.path.splitext(o_basename)
             o_output_dir = os.path.dirname(output_file_path)
-            if o_ext != self.new_ext:
+            if o_ext != self.new_ext:  # Don't f with png extension so the overwrite check works
                 # logger.warning(f"Extension '{o_ext[-3:]}' not valid for output! Updating to '{self.new_ext[-3:]}'...")
                 output_file_path = os.path.join(o_output_dir, f"{o_name}{self.new_ext}")
 

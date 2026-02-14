@@ -771,7 +771,7 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
                 dtype=torch.float32)  # pyright: ignore
         else:
             noise = None
-        self.last_noise = noise
+
         if self.config.solver_order == 1 or self.lower_order_nums < 1 or lower_order_final:
             prev_sample = self.dpm_solver_first_order_update(
                 model_output, sample=sample, noise=noise)

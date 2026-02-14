@@ -59,6 +59,7 @@ def get_reference_latents(
     max_area,
     divisibility,
     i2v_mode: str = "first",
+    size_override: tuple[int, int] = None
 ):
     """
     Returns reference PIL (first element), stacked reference latents [N, H, W, C], and resize scale.
@@ -71,7 +72,12 @@ def get_reference_latents(
 
     # resize target from the first image to keep spatial shape consistent across references
     image_tensor = F.pil_to_tensor(pil_images[0]).unsqueeze(0)
-    image_tensor, k = resize_image(image_tensor, max_area=max_area, divisibility=divisibility)
+    if size_override is None:
+        image_tensor, k = resize_image(image_tensor, max_area=max_area, divisibility=divisibility)
+    else:
+        o_height, o_width = size_override
+        image_tensor = F.resize(image_tensor, [o_height, o_width], interpolation=F.InterpolationMode.BICUBIC)
+        k = None
     target_hw = image_tensor.shape[2:]
 
     latents = []
@@ -99,9 +105,9 @@ def get_reference_latents(
     return pil_images[0], latents, k
 
 
-def get_first_frame_from_image(image, vae, device, max_area, divisibility):
+def get_first_frame_from_image(image, vae, device, max_area, divisibility, size_override=None):
     """Backward-compatible helper: returns a single-frame latent and scale."""
-    pil, latents, k = get_reference_latents(image, vae, device, max_area, divisibility, i2v_mode="first")
+    pil, latents, k = get_reference_latents(image, vae, device, max_area, divisibility, i2v_mode="first", size_override=size_override)
     if latents.dim() == 4 and latents.shape[0] > 1:
         latents = latents[0]
     return pil, latents, k
@@ -196,6 +202,7 @@ def get_velocity(
     attention_mask=None,
     null_attention_mask=None,
     blissful_args=None,
+    cur_step=None,
 ):
     do_cfg_for_step = True  # Default true so behavior only altered if blissful args present
     do_zero_init = do_zero_scale = False
@@ -204,7 +211,6 @@ def get_velocity(
     ):  # if args is None we were called from other than generation so skip blissful
         scale_per_step = blissful_args["scale_per_step"]
         args = blissful_args["args"]
-        cur_step = blissful_args["cur_step"]
         if args.cfgzerostar_scaling:
             do_zero_scale = True
         if args.cfgzerostar_init_steps != -1:
@@ -249,19 +255,33 @@ def get_velocity(
 
 
 @torch.no_grad()
-def decode_latents(latent_visual, vae, device="cuda", batch_size=1, num_frames=None):
-    """Decode latent video to uint8 images. latent_visual: [B*F, H, W, C] -> [B, F, H, W, C]"""
+def decode_latents(latent_visual, vae, device="cuda", batch_size=1, num_frames=None, mode="hv"):
+    """latent_visual: [B*F, H, W, C] -> returns uint8 [B, F, H, W, 3]"""
     b_times_f, h, w, c = latent_visual.shape
     if num_frames is None:
         num_frames = b_times_f // batch_size
-    latent_visual = latent_visual.reshape(batch_size, num_frames, h, w, c)
 
-    # enforce BCHWT ordering and correct scaling factor
+    latent_visual = latent_visual.reshape(batch_size, num_frames, h, w, c)
     latent_visual = latent_visual.to(device=device, dtype=vae.dtype)
-    images = (latent_visual / vae.config.scaling_factor).permute(0, 4, 1, 2, 3)  # B, C, F, H, W
-    images = vae.decode(images).sample  # B, C, F, H, W
-    images = images.permute(0, 2, 3, 4, 1)  # B, F, H, W, C
+
+    # [B, F, H, W, C] -> [B, C, F, H, W]
+    latents_5d = (latent_visual / vae.config.scaling_factor).permute(0, 4, 1, 2, 3)  # HV VAE compatible
+
+    if mode == "fx":  # Flux VAE compatible
+        B, C, F, Hlat, Wlat = latents_5d.shape
+        latents_2d = latents_5d.permute(0, 2, 1, 3, 4).reshape(B * F, C, Hlat, Wlat)
+
+        decoded_2d = vae.decode(latents_2d).sample  # [B*F, 3, Himg, Wimg]
+
+        Himg, Wimg = decoded_2d.shape[-2], decoded_2d.shape[-1]
+        images = decoded_2d.reshape(B, F, decoded_2d.shape[1], Himg, Wimg).permute(0, 2, 1, 3, 4)
+    else:
+        images = vae.decode(latents_5d).sample
+
+    # [B, 3, F, H, W] -> [B, F, H, W, 3]
+    images = images.permute(0, 2, 3, 4, 1)
     images = ((images.clamp(-1.0, 1.0) + 1.0) * 127.5).to(torch.uint8)
+
     return images
 
 
@@ -275,7 +295,7 @@ def generate_sample_latents_only(
     null_text_embeds=None,
     null_pooled_embed=None,
     null_attention_mask=None,
-    first_frames=None,
+    i2v_frames=None,
     num_steps=25,
     guidance_weight=5.0,
     scheduler_scale=1,
@@ -336,7 +356,7 @@ def generate_sample_latents_only(
         null_text_rope_pos,
         guidance_weight,
         scheduler_scale,
-        first_frames,
+        i2v_frames,
         conf,
         progress=progress,
         seed=seed,
@@ -345,7 +365,40 @@ def generate_sample_latents_only(
         null_attention_mask=null_attention_mask,
         blissful_args=blissful_args,
     )
+    if i2v_frames is not None:
+        logger.info("I2V post processing!")
+        latents, _ = i2v_slice(i2v_frames, latents)
+        latents = normalize_first_frame(latents)
     return latents
+
+
+def i2v_slice(
+    i2v_frames: torch.Tensor,
+    latent: torch.Tensor,
+    visual_cond_mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Slice first and optionally last frames into provided latent at positions 0, -1, and optionally update vcond mask"""
+    if i2v_frames is not None:
+        i2vf = i2v_frames.to(device=latent.device, dtype=latent.dtype)
+
+        # Normalize to [F,H,W,C]
+        if i2vf.dim() == latent.dim() - 1:
+            i2vf = i2vf.unsqueeze(0)
+
+        if i2vf.shape[0] not in (1, 2):
+            raise ValueError(f"Expected 1 or 2 conditioning frames, got {i2vf.shape[0]}")
+
+        # Always clamp the first frame
+        latent[:1] = i2vf[0:1]
+        if visual_cond_mask is not None:
+            visual_cond_mask[:1] = 1
+
+        # If we have a second frame, clamp the last frame too
+        if i2vf.shape[0] == 2:
+            latent[-1:] = i2vf[1:2]
+            if visual_cond_mask is not None:
+                visual_cond_mask[-1:] = 1
+    return latent, visual_cond_mask
 
 
 @torch.no_grad()
@@ -361,22 +414,16 @@ def generate(
     null_text_rope_pos,
     guidance_weight,
     scheduler_scale,
-    first_frames,
+    i2v_frames,
     conf,
     progress=False,
     seed=6554,
     tp_mesh=None,
     attention_mask=None,
     null_attention_mask=None,
-    first_frame_indices=None,
     blissful_args=None,
 ):
-    if blissful_args is None:
-        blissful_args = {"cur_step": 0, "scale_per_step": None, "args": None}
-        args = None
-    else:
-        args = blissful_args["args"]
-
+    args = blissful_args["args"] if blissful_args is not None else None
     sparse_params = get_sparse_params(conf, {"visual": img}, device)
 
     # Setup scheduler
@@ -393,53 +440,28 @@ def generate(
             algorithm_type="dpmsolver++",
         )
         scheduler.set_timesteps(args.steps, device=device)
+        scheduler.set_begin_index(0)
         timesteps = scheduler.sigmas.to(device)
 
     # Setup previewer
-    previewer = None
     if args is not None and args.preview_latent_every:
         previewer = LatentPreviewer(
-            args, original_latents=img, scheduler=scheduler, device=device, dtype=_GLOBAL_DTYPE, model_type="k5"
+            args,
+            original_latents=img,
+            scheduler=scheduler,
+            device=device,
+            dtype=_GLOBAL_DTYPE,
+            model_type="k5" if "2i-" not in args.task else "k5_flux",
         )
         previewer.noise_remain = 1.0000
         if scheduler is None:
             previewer.sigmas = timesteps
 
-    if tp_mesh:
-        tp_rank = tp_mesh["tensor_parallel"].get_local_rank()
-        tp_world_size = tp_mesh["tensor_parallel"].size()
-        img = torch.chunk(img, tp_world_size, dim=1)[tp_rank]
-
-    if first_frames is not None and first_frame_indices is None:
-        n = 1 if first_frames.dim() == 3 else first_frames.shape[0]
-        if n == 1:
-            first_frame_indices = [0]
-        elif n == 2:
-            first_frame_indices = [0, img.shape[0] - 1]
-        else:
-            raise ValueError(f"Expected 1 or 2 conditioning frames, got {n}")
-
-    blissful_args["cur_step"] = 0
-
-    for timestep, timestep_diff in tqdm(list(zip(timesteps[:-1], torch.diff(timesteps)))):
-        time = timestep.unsqueeze(0)
+    for i, (timestep, timestep_diff) in enumerate(tqdm(zip(timesteps[:-1], torch.diff(timesteps)), total=len(timesteps) - 1)):
         if model.visual_cond:
             visual_cond = torch.zeros_like(img)
             visual_cond_mask = torch.zeros([*img.shape[:-1], 1], dtype=img.dtype, device=img.device)
-            if first_frames is not None:
-                # Allow either a single frame (shape [..., H, W, C]) or multiple frames stacked on dim 0.
-                ff = first_frames.to(device=visual_cond.device, dtype=visual_cond.dtype)
-                if ff.dim() == img.dim() - 1:  # H, W, C
-                    ff = ff.unsqueeze(0)
-
-                if len(first_frame_indices) > ff.shape[0]:
-                    # If fewer frames provided than indices, repeat the last available frame.
-                    ff = torch.cat([ff, ff[-1:].repeat(len(first_frame_indices) - ff.shape[0], 1, 1, 1)], dim=0)
-                for idx, frame_idx in enumerate(first_frame_indices):
-                    if 0 <= frame_idx < img.shape[0]:
-                        img[frame_idx : frame_idx + 1] = ff[idx]
-                        visual_cond_mask[frame_idx : frame_idx + 1] = 1
-                        visual_cond[frame_idx : frame_idx + 1] = ff[idx]
+            img, visual_cond_mask = i2v_slice(i2v_frames, img, visual_cond_mask)
             model_input = torch.cat([img, visual_cond, visual_cond_mask], dim=-1)
         else:
             model_input = img
@@ -447,7 +469,7 @@ def generate(
         pred_velocity = get_velocity(
             model,
             model_input,
-            time,
+            timestep.unsqueeze(0),
             text_embeds,
             null_text_embeds,
             visual_rope_pos,
@@ -459,36 +481,19 @@ def generate(
             attention_mask=attention_mask,
             null_attention_mask=null_attention_mask,
             blissful_args=blissful_args,
+            cur_step=i,
         )
-        latent = img[..., : pred_velocity.shape[-1]]  # Slice off extra channels potentially added during i2i edit... maybe
-
+        latent = img[..., : pred_velocity.shape[-1]]  # Slice off any potential extra ti2i channels else does nothing
         if args is None or args.scheduler == "default":
             latent += timestep_diff * pred_velocity
         else:
-            real_timestep = scheduler.timesteps[blissful_args["cur_step"]]
-            latent = scheduler.step(pred_velocity, real_timestep, latent, return_dict=False)[0]
+            latent = scheduler.step(pred_velocity, timestep, latent, return_dict=False)[0]
 
-        if previewer is not None:
+        if args is not None and args.preview_latent_every:
             previewer.noise_remain += timestep_diff  # Diff is negative so add it to decrease noise_remain
-            if args.preview_latent_every is not None and (blissful_args["cur_step"] + 1) % args.preview_latent_every == 0:
-                if blissful_args["cur_step"] < args.steps:
+            if (i + 1) % args.preview_latent_every == 0 and i < args.steps:
                     previewer.preview(latent)
-
-        blissful_args["cur_step"] += 1
-
-    if first_frames is not None:
-        logger.info("i2v post processing")
-        ff = first_frames.to(device=latent.device, dtype=latent.dtype)
-        if ff.dim() == latent.dim() - 1:
-            ff = ff.unsqueeze(0)
-
-        for idx, frame_idx in enumerate(first_frame_indices):
-            if 0 <= frame_idx < latent.shape[0]:
-                src = min(idx, ff.shape[0] - 1)
-                latent[frame_idx : frame_idx + 1] = ff[src : src + 1]
-
-        latent = normalize_first_frame(latent)
-
+        img[..., : pred_velocity.shape[-1]] = latent  # potentially slice back in updated latent for next loop, else does nothing
     return latent
 
 
@@ -752,148 +757,6 @@ def generate_sample_ti2i(
             images = (images / vae.config.scaling_factor).permute(0, 4, 1, 2, 3)
             if image_vae:
                 images = images[:, :, 0]
-            images = vae.decode(images).sample
-            images = ((images.clamp(-1.0, 1.0) + 1.0) * 127.5).to(torch.uint8)
-
-    if offload:
-        vae = vae.to("cpu", non_blocking=True)
-    torch.cuda.empty_cache()
-
-    return images
-
-
-def generate_sample_i2v(
-    shape,
-    caption,
-    dit,
-    vae,
-    conf,
-    text_embedder,
-    images,
-    num_steps=50,
-    guidance_weight=5.0,
-    scheduler_scale=1,
-    negative_caption="",
-    seed=6554,
-    device="cuda",
-    vae_device="cuda",
-    progress=True,
-    offload=False,
-    tp_mesh=None,
-    i2v_mode="first",
-):
-    text_embedder.embedder.mode = "i2v"
-    bs, duration, height, width, dim = shape
-
-    g = torch.Generator(device="cuda")
-    g.manual_seed(seed)
-    img = torch.randn(bs * duration, height, width, dim, device=device, generator=g, dtype=_GLOBAL_DTYPE)
-
-    if duration == 1:
-        type_of_content = "image"
-    else:
-        type_of_content = "video"
-
-    with torch.no_grad():
-        bs_text_embed, text_cu_seqlens, attention_mask = text_embedder.encode([caption], type_of_content=type_of_content)
-        bs_null_text_embed, null_text_cu_seqlens, null_attention_mask = text_embedder.encode(
-            [negative_caption], type_of_content=type_of_content
-        )
-
-    if offload:
-        text_embedder = text_embedder.to("cpu")
-
-    for key in bs_text_embed:
-        bs_text_embed[key] = bs_text_embed[key].to(device=device)
-        bs_null_text_embed[key] = bs_null_text_embed[key].to(device=device)
-    text_cu_seqlens = text_cu_seqlens.to(device=device)[-1].item()
-    null_text_cu_seqlens = null_text_cu_seqlens.to(device=device)[-1].item()
-
-    visual_rope_pos = [
-        torch.arange(duration),
-        torch.arange(shape[-3] // conf.model.dit_params.patch_size[1]),
-        torch.arange(shape[-2] // conf.model.dit_params.patch_size[2]),
-    ]
-    text_rope_pos = torch.arange(text_cu_seqlens)
-    null_text_rope_pos = torch.arange(null_text_cu_seqlens)
-
-    if offload:
-        dit.to(device, non_blocking=True)
-
-    # Prepare conditioning frames and placement indices.
-    first_frames = images
-    first_frame_indices = [0]
-    if i2v_mode == "first_last" and duration > 1 and images is not None:
-        # Expect images shape [F,H,W,C]; if only one provided, duplicate it.
-        if images.dim() == 3:
-            images = images.unsqueeze(0)
-        if images.shape[0] == 1:
-            images = torch.cat([images, images], dim=0)
-        first_frames = images[:2]
-        first_frame_indices = [0, duration - 1]
-
-    if tp_mesh and first_frames is not None and first_frames.dim() > 3:
-        tp_rank = tp_mesh["tensor_parallel"].get_local_rank()
-        tp_world_size = tp_mesh["tensor_parallel"].size()
-        first_frames = torch.chunk(first_frames, tp_world_size, dim=0)[tp_rank]
-
-    with torch.no_grad():
-        with torch.autocast(device_type="cuda", dtype=_GLOBAL_DTYPE):
-            latent_visual = generate(
-                dit,
-                device,
-                img,
-                num_steps,
-                bs_text_embed,
-                bs_null_text_embed,
-                visual_rope_pos,
-                text_rope_pos,
-                null_text_rope_pos,
-                guidance_weight,
-                scheduler_scale,
-                first_frames,
-                conf,
-                seed=seed,
-                progress=progress,
-                tp_mesh=tp_mesh,
-                attention_mask=attention_mask,
-                null_attention_mask=null_attention_mask,
-                first_frame_indices=first_frame_indices if first_frames is not None else None,
-            )
-    if tp_mesh:
-        tensor_list = [
-            torch.zeros_like(latent_visual, device=latent_visual.device) for _ in range(tp_mesh["tensor_parallel"].size())
-        ]
-        all_gather(tensor_list, latent_visual.contiguous(), group=tp_mesh.get_group(mesh_dim="tensor_parallel"))
-        latent_visual = torch.cat(tensor_list, dim=1)
-
-    if first_frames is not None:
-        ff = first_frames.to(device=latent_visual.device, dtype=latent_visual.dtype)
-        if ff.dim() == 3:
-            ff = ff.unsqueeze(0)
-        for idx, frame_idx in enumerate(first_frame_indices):
-            if frame_idx < latent_visual.shape[0]:
-                latent_visual[frame_idx : frame_idx + 1] = ff[min(idx, ff.shape[0] - 1)]
-    latent_visual = normalize_first_frame(latent_visual)
-
-    if offload:
-        dit = dit.to("cpu", non_blocking=True)
-    torch.cuda.empty_cache()
-
-    if offload:
-        vae = vae.to(vae_device, non_blocking=True)
-
-    with torch.no_grad():
-        with torch.autocast(device_type="cuda", dtype=_GLOBAL_DTYPE):
-            images = latent_visual.reshape(
-                bs,
-                -1,
-                latent_visual.shape[-3],
-                latent_visual.shape[-2],
-                latent_visual.shape[-1],
-            )
-            images = images.to(device=vae_device)
-            images = (images / vae.config.scaling_factor).permute(0, 4, 1, 2, 3)
             images = vae.decode(images).sample
             images = ((images.clamp(-1.0, 1.0) + 1.0) * 127.5).to(torch.uint8)
 

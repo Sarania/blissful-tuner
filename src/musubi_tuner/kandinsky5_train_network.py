@@ -25,7 +25,6 @@ from musubi_tuner.kandinsky5.models.text_embedders import get_text_embedder
 from musubi_tuner.kandinsky5 import generation_utils
 from musubi_tuner.kandinsky5.models.utils import fast_sta_nabla
 from musubi_tuner.kandinsky5.generation_utils import get_first_frame_from_image
-from musubi_tuner.kandinsky5.models import attention as k5_attention
 from musubi_tuner.kandinsky5.models import nn as k5_nn
 from musubi_tuner.modules.fp8_optimization_utils import apply_fp8_monkey_patch
 
@@ -613,9 +612,6 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
 
     def compile_transformer(self, args, transformer):
         transformer: DiffusionTransformer3D = transformer
-        k5_attention.activate_compile(
-            mode=args.compile_mode, backend=args.compile_backend, fullgraph=args.compile_fullgraph, dynamic=args.compile_dynamic
-        )
         k5_nn.activate_compile(
             mode=args.compile_mode, backend=args.compile_backend, fullgraph=args.compile_fullgraph, dynamic=args.compile_dynamic
         )

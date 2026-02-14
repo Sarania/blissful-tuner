@@ -85,41 +85,69 @@ def fast_sta_nabla(T: int, H: int, W: int, wT: int = 3, wH: int = 3, wW: int = 3
     return sta.reshape(T * H * W, T * H * W)
 
 
-def nablaT_v2(
-    q: Tensor,
-    k: Tensor,
-    sta: Tensor,
-    thr: float = 0.9,
-    add_sta: bool = True,
-    method: str = "topcdf",
-) -> BlockMask:
-    # Map estimation
+def nablaT_v2(q, k, sta, thr=0.9, add_sta=True, method="topcdf", BLOCK=128):
+    # q,k: [B, h, S, D]
     B, h, S, D = q.shape
-    s1 = S // 64
-    qa = q.reshape(B, h, s1, 64, D).mean(-2)
-    ka = k.reshape(B, h, s1, 64, D).mean(-2).transpose(-2, -1)
-    map = qa @ ka
 
-    map = torch.softmax(map / math.sqrt(D), dim=-1)
-    # Map binarization
-    vals, inds = map.sort(-1)
+    if S % BLOCK != 0:
+        raise ValueError(f"NABLA requires S divisible by BLOCK. Got S={S}, BLOCK={BLOCK}")
+
+    s1 = S // BLOCK  # number of query/key blocks
+
+    # Downsample q/k into blocks of size BLOCK
+    qa = q.reshape(B, h, s1, BLOCK, D).mean(-2)
+    ka = k.reshape(B, h, s1, BLOCK, D).mean(-2).transpose(-2, -1)
+    attn_map = qa @ ka  # [B, h, s1, s1]
+    attn_map = torch.softmax(attn_map / math.sqrt(D), dim=-1)
+
+    # Binarize map into mask [B,h,s1,s1]
+    vals, inds = attn_map.sort(-1)
     if method == "topk":
-        # thr can be a float ratio (0-1) or absolute count
         k_top = int(thr * vals.shape[-1]) if 0 < thr < 1 else int(thr)
         k_top = max(1, min(k_top, vals.shape[-1]))
-        mask = torch.zeros_like(vals, dtype=torch.int)
+        mask = torch.zeros_like(vals, dtype=torch.bool)
         topk_inds = inds[..., -k_top:]
-        mask.scatter_(-1, topk_inds, 1)
+        mask.scatter_(-1, topk_inds, True)
     else:
-        # default: cumulative CDF threshold
-        cvals = vals.cumsum_(-1)
-        mask = (cvals >= 1 - thr).int()
+        cvals = vals.cumsum(-1)
+        mask = cvals >= 1 - thr
         mask = mask.gather(-1, inds.argsort(-1))
 
-    if add_sta:
-        mask = torch.logical_or(mask, sta)
+    if add_sta and sta is not None:
+        # sta should become [B,h,s1,s1] and bool
 
-    # BlockMask creation
+        sta_b = sta.to(torch.bool)
+
+        # If sta is [B,1,*,*], expand to heads
+        if sta_b.dim() == 4 and sta_b.shape[1] == 1:
+            # expand heads later after fixing spatial dims
+            pass
+
+        # Fix spatial dims: allow sta built for 64-block grid to be used with 128-block grid
+        if sta_b.shape[-1] != s1 or sta_b.shape[-2] != s1:
+            old = sta_b.shape[-1]
+            if old == s1 * 2:
+                # pool 2x2 blocks by OR to downsample
+                sta_b = sta_b.reshape(sta_b.shape[0], sta_b.shape[1], s1, 2, s1, 2).any(dim=(-1, -3))
+            else:
+                raise ValueError(f"sta grid {sta_b.shape[-2:]} does not match s1={s1} (or 2*s1)")
+
+        # Now expand head dim if needed
+        if sta_b.shape[1] == 1:
+            sta_b = sta_b.expand(B, h, s1, s1)
+        elif sta_b.shape[1] != h:
+            raise ValueError(f"sta head dim {sta_b.shape[1]} must be 1 or h={h}")
+
+        mask = mask | sta_b
+
     kv_nb = mask.sum(-1).to(torch.int32)
     kv_inds = mask.argsort(dim=-1, descending=True).to(torch.int32)
-    return BlockMask.from_kv_blocks(torch.zeros_like(kv_nb), kv_inds, kv_nb, kv_inds, BLOCK_SIZE=64, mask_mod=None)
+
+    return BlockMask.from_kv_blocks(
+        torch.zeros_like(kv_nb),
+        kv_inds,
+        kv_nb,
+        kv_inds,
+        BLOCK_SIZE=BLOCK,
+        mask_mod=None,
+    )

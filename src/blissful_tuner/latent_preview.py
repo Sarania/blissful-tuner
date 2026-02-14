@@ -34,7 +34,7 @@ class LatentPreviewer:
         dtype: torch.dtype,
         model_type: str = "hunyuan",
     ) -> None:
-        self.mode = "latent2rgb" if args.preview_vae is None else "taehv" if model_type != "flux" else "taesd"
+        self.mode = "latent2rgb" if args.preview_vae is None else "taehv" if model_type not in ["flux", "k5_flux"] else "taesd"
         logger.info(f"Initializing latent previewer with mode {self.mode}...")
         self.subtract_noise = False
         self.args = args
@@ -46,7 +46,7 @@ class LatentPreviewer:
         self.warning_done = False
         self.noise_remain = None
 
-        if self.model_type not in ["hunyuan", "wan", "framepack", "flux", "k5"]:
+        if self.model_type not in ["hunyuan", "wan", "framepack", "flux", "k5", "k5_flux"]:
             raise ValueError(f"Unsupported model type: {self.model_type}")
 
         if (
@@ -179,6 +179,8 @@ class LatentPreviewer:
 
     @torch.inference_mode()
     def decode_taesd(self, latents: torch.Tensor):
+        if self.model_type == "k5_flux":
+            latents = latents.permute(0, 3, 1, 2)  # Reordered to B, C, H, W for TAE
         self.tae.to(self.device)  # Onload
         latents = latents.to(device=self.device, dtype=self.dtype)
         decoded = self.tae.decoder(latents).clamp(0, 1)
@@ -256,8 +258,12 @@ class LatentPreviewer:
             },
         }
         if self.model_type == "k5":
-            latents = latents.permute(0, 4, 1, 2, 3)  # Comes in as channels last
-        idx = self.model_type if self.model_type not in ["k5", "framepack"] else "hunyuan"
+            latents = latents.permute(0, 4, 1, 2, 3)  # Comes in as channels last, make B, C, F, H, W
+        elif self.model_type == "k5_flux":
+            latents = latents.permute(0, 3, 1, 2)  # Make B, C, H, W
+        idx = (
+            "flux" if self.model_type == "k5_flux" else self.model_type if self.model_type not in ["k5", "framepack"] else "hunyuan"
+        )
         latent_rgb_factors = model_params[idx]["rgb_factors"]
         latent_rgb_factors_bias = model_params[idx]["bias"]
 
@@ -267,7 +273,7 @@ class LatentPreviewer:
 
         # For each frame, apply the linear transform
         latent_images = []
-        if self.model_type == "flux":
+        if self.model_type in ["flux", "k5_flux"]:
             latents = latents[:, :, None, :, :]  # Will be B, C, H, W so make a fake frame dim to make life easy
         for t in range(latents.shape[2]):  # B, C, F, H, W
             extracted = latents[:, :, t, :, :][0].permute(1, 2, 0)  # shape = (H, W, C) after .permute(1,2,0)

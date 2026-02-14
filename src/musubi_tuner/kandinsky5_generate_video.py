@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from typing import Optional
 
 import torch
-import torchvision.utils as vutils
 from safetensors.torch import load_file, save_file
 from safetensors import safe_open
 from datetime import datetime as datetime
@@ -115,21 +114,22 @@ def main():
         args.frames = (corrected - 1) // 4 + 1
     elif args.frames is not None:
         args.video_length = ((args.frames - 1) * 4) + 1
+
     if args.compile:
         logger.info("Enabling torch.compile!")
         from musubi_tuner.kandinsky5.models.nn import activate_compile
 
         activate_compile()
+
     args.vae_dtype = ensure_dtype_form(args.vae_dtype, out_form="torch")
     task_conf = TASK_CONFIGS[args.task]
-    if args.force_traditional_attn:
+    if not args.use_nabla_attn:
         if task_conf.attention.type != "flash":
             logger.info("Overriding attention backend to traditional(Flash/Sage/Xformers)!")
             task_conf.attention = AttentionConfig(type="flash", chunk=False, causal=False, local=False, glob=False, window=3)
-        else:
-            logger.warning("Requested forced traditional attention but task type already defaults to traditional attention!")
-    elif args.force_nabla_attn:
-        if task_conf.attention.type != "nabla":
+
+    else:
+        if args.compile:
             logger.info("Overriding attention backend to NABLA!")
             task_conf.attention = AttentionConfig(
                 type="nabla",
@@ -146,13 +146,12 @@ def main():
                 wW=3,
             )
         else:
-            logger.warning("Requested forced NABLA but task type already defaults to NABLA!")
+            raise ValueError("Requested NABLA but not compile, NABLA uses flex_attention on the backend and requires --compile")
+
     device = _get_device(args.device)
 
-    if args.less_restrictive_i2v_params and task_conf.attention.type == "nabla":
-        raise ValueError(
-            "Cannot allow --less_restrictive_i2v_params when nabla attention is enabled! Consider using '--force_traditional_attn' to disable it completely when using this mode."
-        )
+    if args.advanced_i2v and task_conf.attention.type == "nabla":
+        raise ValueError("Cannot allow '--advanced_i2v' when NABLA attention is enabled!")
 
     width = args.width or task_conf.resolution
     height = args.height or task_conf.resolution
@@ -191,11 +190,11 @@ def main():
         with safe_open(args.decode_from_latent, framework="pt") as f:
             metadata = f.metadata() if not args.no_metadata else None
         logger.info(f"Prepared metadata: {metadata}")
-        frames = len(latents)
-        pixel_frames = ((frames - 1) * 4) + 1
+        frames = args.frames = len(latents)
+        args.video_length = ((args.frames - 1) * 4) + 1
         vae = trainer._load_vae_for_sampling(args, device=device)
-        logger.info(f"Decoding {frames} latent frames into {pixel_frames} pixel frames!")
-        images = decode_latents(latents, vae, device=device, batch_size=shape[0])
+        logger.info(f"Decoding {args.frames} latent frames into {args.video_length} pixel frames!")
+        images = decode_latents(latents, vae, device=device, batch_size=shape[0], mode="hv" if "2i-" not in args.task else "fx")
         original_base_name = os.path.splitext(os.path.basename(args.decode_from_latent))[0].replace("_latent", "")
     else:
         metadata = prepare_metadata(args) if not args.no_metadata else None
@@ -242,54 +241,55 @@ def main():
             torch.backends.cuda.matmul.fp32_precision = "tf32"
 
         # Prepare I2V
-        first_frames = None
+        i2v_frames = None
         # Optional init image(s) -> latent first/last frames (i2v-style). Requires temporary VAE load.
         if args.image:
             vae_for_encode = trainer._load_vae_for_sampling(args, device=device)
-            try:
-                max_area = (
-                    2048 * 2048
-                    if args.less_restrictive_i2v_params
-                    else 512 * 768
-                    if int(task_conf.resolution) == 512
-                    else 1024 * 1024
-                )
-                divisibility = 16 if args.less_restrictive_i2v_params or int(task_conf.resolution) == 512 else 128
-                # Always encode the first image
-                _, lat_image_first, _ = get_first_frame_from_image(
-                    args.image,
+            max_area = (
+                2048 * 2048
+                if args.advanced_i2v
+                else 512 * 768
+                if int(task_conf.resolution) == 512
+                else 1024 * 1024
+            )
+            divisibility = 16 if args.advanced_i2v or task_conf.attention.type != "nabla" else 128
+            size_override = None if not args.advanced_i2v else (height, width)
+            # Always encode the first image
+            _, lat_image_first, _ = get_first_frame_from_image(
+                args.image,
+                vae_for_encode,
+                device,
+                max_area=max_area,
+                divisibility=divisibility,
+                size_override=size_override
+            )
+            frame_list = [lat_image_first[:1]]
+            # Optionally encode the last image
+            if args.image_last:
+                _, lat_image_last, _ = get_first_frame_from_image(
+                    args.image_last,
                     vae_for_encode,
                     device,
                     max_area=max_area,
                     divisibility=divisibility,
+                    size_override=size_override
                 )
-                frame_list = [lat_image_first[:1]]
-                # Optionally encode the last image
-                if args.image_last:
-                    _, lat_image_last, _ = get_first_frame_from_image(
-                        args.image_last,
-                        vae_for_encode,
-                        device,
-                        max_area=max_area,
-                        divisibility=divisibility,
-                    )
-                    frame_list.append(lat_image_last[:1])
-                first_frames = torch.cat(frame_list, dim=0)
-                # If the init image was resized by the encoder, match sampling shape to it.
-                if first_frames is not None:
-                    latent_h = int(first_frames.shape[1])
-                    latent_w = int(first_frames.shape[2])
-                    width = latent_w * 8
-                    height = latent_h * 8
-                    shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
+                frame_list.append(lat_image_last[:1])
+            i2v_frames = torch.cat(frame_list, dim=0)
+            # If the init image was resized by the encoder, match sampling shape to it.
+            if i2v_frames is not None:
+                latent_h = int(i2v_frames.shape[1])
+                latent_w = int(i2v_frames.shape[2])
+                old_w = width
+                old_h = height
+                width = latent_w * 8
+                height = latent_h * 8
+                shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
+                if old_w != width or old_h != height:
                     logger.info(f"I2V updated resolution (W*H) to: {width}x{height}, latent: {latent_w}x{latent_h}")
-            finally:
-                try:
-                    vae_for_encode.to("cpu")
-                except Exception:
-                    pass
-                del vae_for_encode
-                clean_memory_on_device(device)
+            vae_for_encode.to("cpu")
+            del vae_for_encode
+            clean_memory_on_device(device)
         dit_weight_dtype = None if args.fp8_base or args.fp8_scaled else ensure_dtype_form(args.dtype, out_form="torch")
         conf_ns = SimpleNamespace(model=task_conf, metrics=SimpleNamespace(scale_factor=task_conf.scale_factor))
 
@@ -348,21 +348,17 @@ def main():
             dit.move_to_device_except_swap_blocks(device)
             dit.prepare_block_swap_before_forward()
 
-        if dit_weight_dtype is not None and dit_weight_dtype != torch.float32:
-            autocast_dtype = dit_weight_dtype if device.type == "cuda" else None
-        else:
-            autocast_dtype = torch.float16 if args.fp16_accumulation and not args.fp8_fast else torch.bfloat16
-
-        if autocast_dtype is not None:
-            set_global_dtype(autocast_dtype)
+        autocast_dtype = torch.bfloat16
 
         blissful_args = {"scale_per_step": scale_per_step, "args": args}
 
-        if args.fp16_accumulation:
-            logger.info(
-                f"Enabling fp16 accumulation{' and switching autocast to float16 for maximum performance' if autocast_dtype == torch.float16 else ''}."
-            )
+        if args.fp16_fast:
+            logger.info("Enabling fp16 accumulation and switching math dtype to float16 for fp16_fast.")
             torch.backends.cuda.matmul.allow_fp16_accumulation = True
+            autocast_dtype = torch.float16
+
+        if autocast_dtype is not None:
+            set_global_dtype(autocast_dtype)
 
         if args.cfgzerostar_scaling or args.cfgzerostar_init_steps != -1:
             logger.info(
@@ -381,7 +377,7 @@ def main():
                 null_text_embeds=null_text_embeds,
                 null_pooled_embed=null_pooled_embed,
                 null_attention_mask=None,
-                first_frames=first_frames,
+                i2v_frames=i2v_frames,
                 num_steps=steps,
                 guidance_weight=guidance,
                 scheduler_scale=scheduler_scale,
@@ -406,7 +402,9 @@ def main():
             save_file(sd, latent_path, metadata=metadata)
         if args.output_type in ["video", "both"]:
             vae = trainer._load_vae_for_sampling(args, device=device)
-            images = decode_latents(latents, vae, device=device, batch_size=shape[0], num_frames=frames)
+            images = decode_latents(
+                latents, vae, device=device, batch_size=shape[0], num_frames=frames, mode="hv" if "2i-" not in args.task else "fx"
+            )
             try:
                 vae.to("cpu")
             except Exception:
@@ -414,36 +412,29 @@ def main():
             del vae
         clean_memory_on_device(device)
     # Save
-    if args.output_type != "latent":
-        if frames > 1:
-            video_tensor = images.permute(0, 4, 1, 2, 3).float() / 255.0
-            video_tensor = video_tensor.cpu()
-            video_path = (
-                f"{args.save_path}/{time_flag}_{args.seed}.mp4"
-                if not args.decode_from_latent
-                else f"{args.save_path}/{original_base_name}.mp4"
-            )
-            save_media_advanced(video_tensor, video_path, args, metadata=metadata)
+    if args.output_type != "latent":  # images incoming is  B, F, H, W, C
+        video_tensor = images.permute(0, 4, 1, 2, 3).float() / 255.0  # B, C, F, H, W
+        video_tensor = video_tensor.cpu()
+        video_path = (
+            f"{args.save_path}/{time_flag}_{args.seed}.mp4"
+            if not args.decode_from_latent
+            else f"{args.save_path}/{original_base_name}.mp4"
+        )
+        save_media_advanced(
+            video_tensor, video_path, args, metadata=metadata
+        )  # Handles single frame case internally choosing between vid/image
+        if images.shape[1] > 1:  # If we have a vid, save first (and potentially last) frame too
             first_frame_path = os.path.splitext(video_path)[0] + "_first.png"
-            frame = images[0, 0].float() / 255.0
+            frame = images[:, 0:1]  # Slice out first, B, 1, H, W, C
+            frame = frame.permute(0, 4, 1, 2, 3).float() / 255.0  # Prepare shape for SMA
             frame = frame.cpu()
-            vutils.save_image(frame.permute(2, 0, 1), first_frame_path)
-            logger.info(f"Saved first frame to {first_frame_path}")
+            save_media_advanced(frame, first_frame_path, args, metadata=metadata)
             if args.save_last_frame:
                 last_frame_path = os.path.splitext(video_path)[0] + "_last.png"
-                frame = images[0, -1].float() / 255.0
+                frame = images[:, -1:]  # Slice out last
+                frame = frame.permute(0, 4, 1, 2, 3).float() / 255.0  # Prepare shape
                 frame = frame.cpu()
-                vutils.save_image(frame.permute(2, 0, 1), last_frame_path)
-        else:
-            frame = images[0, 0].float() / 255.0
-            frame = frame.cpu()
-            video_path = (
-                f"{args.save_path}/{time_flag}_{args.seed}.mp4"
-                if not args.decode_from_latent
-                else f"{args.save_path}/{original_base_name}.png"
-            )
-            vutils.save_image(frame.permute(2, 0, 1), video_path)
-            logger.info(f"Saved image to {video_path}")
+                save_media_advanced(frame, last_frame_path, args, metadata=metadata)
 
 
 if __name__ == "__main__":

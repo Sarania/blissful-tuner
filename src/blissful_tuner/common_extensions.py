@@ -119,6 +119,7 @@ def save_media_advanced(
         output_file_path=output_video,
         codec=args.codec if hasattr(args, "codec") else None,
         container=args.container if hasattr(args, "container") else None,
+        image_only=medias.shape[0] == 1,
     )
 
     outputs = []
