@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 import torch
+from torchvision.transforms.functional import pil_to_tensor
 from safetensors.torch import load_file, save_file
 from safetensors import safe_open
 from datetime import datetime as datetime
@@ -14,6 +15,7 @@ from musubi_tuner.kandinsky5.generation_utils import (
     decode_latents,
     get_first_frame_from_image,
     set_global_dtype,
+    _to_pil,
 )
 from musubi_tuner.kandinsky5.models.text_embedders import get_text_embedder
 from musubi_tuner.kandinsky5_train_network import Kandinsky5NetworkTrainer
@@ -114,6 +116,12 @@ def main():
         args.frames = (corrected - 1) // 4 + 1
     elif args.frames is not None:
         args.video_length = ((args.frames - 1) * 4) + 1
+    elif "-t2i-" in args.task or "-i2i-" in args.task:
+        args.frames = args.video_length = frames = 1
+    else:
+        raise ValueError(
+            "Neither --frames nor --video_length was provided and mode is not t2i or i2i so we don't know how many frames to make!"
+        )
 
     if args.compile:
         logger.info("Enabling torch.compile!")
@@ -210,9 +218,21 @@ def main():
             quantized_qwen=args.quantized_qwen if not args.text_encoder_cpu else False,
             qwen_auto=args.text_encoder_auto,
         )
+        image_edit = args.image is not None and "-i2i-" in args.task
+        te_image = None if not image_edit else pil_to_tensor(_to_pil(args.image))
         neg_text = args.negative_prompt or "low quality, bad quality"
-        enc_out, _ = text_embedder.encode([args.prompt], type_of_content=("video" if frames > 1 else "image"), use_system=True)
-        neg_out, _ = text_embedder.encode([neg_text], type_of_content=("video" if frames > 1 else "image"), use_system=True)
+        enc_out, _ = text_embedder.encode(
+            [args.prompt],
+            te_image,
+            type_of_content=("video" if frames > 1 else "image" if not image_edit else "image_edit"),
+            use_system=True,
+        )
+        neg_out, _ = text_embedder.encode(
+            [neg_text],
+            te_image,
+            type_of_content=("video" if frames > 1 else "image" if not image_edit else "image_edit"),
+            use_system=True,
+        )
         text_embeds = enc_out["text_embeds"].to("cpu")
         pooled_embed = enc_out["pooled_embed"].to("cpu")
         null_text_embeds = neg_out["text_embeds"].to("cpu")
@@ -244,14 +264,9 @@ def main():
         i2v_frames = None
         # Optional init image(s) -> latent first/last frames (i2v-style). Requires temporary VAE load.
         if args.image:
+            is_flux_vae = "-i2i-" in args.task
             vae_for_encode = trainer._load_vae_for_sampling(args, device=device)
-            max_area = (
-                2048 * 2048
-                if args.advanced_i2v
-                else 512 * 768
-                if int(task_conf.resolution) == 512
-                else 1024 * 1024
-            )
+            max_area = 2048 * 2048 if args.advanced_i2v else 512 * 768 if int(task_conf.resolution) == 512 else 1024 * 1024
             divisibility = 16 if args.advanced_i2v or task_conf.attention.type != "nabla" else 128
             size_override = None if not args.advanced_i2v else (height, width)
             # Always encode the first image
@@ -261,7 +276,8 @@ def main():
                 device,
                 max_area=max_area,
                 divisibility=divisibility,
-                size_override=size_override
+                size_override=size_override,
+                is_flux_vae=is_flux_vae,
             )
             frame_list = [lat_image_first[:1]]
             # Optionally encode the last image
@@ -272,7 +288,8 @@ def main():
                     device,
                     max_area=max_area,
                     divisibility=divisibility,
-                    size_override=size_override
+                    size_override=size_override,
+                    is_flux_vae=is_flux_vae,
                 )
                 frame_list.append(lat_image_last[:1])
             i2v_frames = torch.cat(frame_list, dim=0)
@@ -286,7 +303,7 @@ def main():
                 height = latent_h * 8
                 shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
                 if old_w != width or old_h != height:
-                    logger.info(f"I2V updated resolution (W*H) to: {width}x{height}, latent: {latent_w}x{latent_h}")
+                    logger.warning(f"I2VI updated resolution (W*H) to: {width}x{height}, latent: {latent_w}x{latent_h}")
             vae_for_encode.to("cpu")
             del vae_for_encode
             clean_memory_on_device(device)

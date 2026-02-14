@@ -130,13 +130,26 @@ class Qwen2_5_VLTextEmbedder:
             crop_start = 0
 
         if type_of_content == "image_edit":
+            # Normalize images to a list aligned with full_texts
             if images is not None:
-                for i in range(len(images)):
-                    image_tokens = "".join(["<|vision_start|><|image_pad|><|vision_end|>"] * len(images[i]))
-                    full_texts[i] = full_texts[i] + image_tokens + "<|im_end|>"
-                images = [F.resize(i, (i.shape[-2] // 2, i.shape[-1] // 2)) for i in images]
+                if isinstance(images, torch.Tensor):
+                    # [B,C,H,W] or [C,H,W]
+                    if images.dim() == 3:
+                        images = images.unsqueeze(0)
+                    images = [images[i] for i in range(images.shape[0])]
+                elif not isinstance(images, (list, tuple)):
+                    images = [images]
 
-            max_length = (self.max_length + crop_start) if images is None else None
+                # If one image provided for many prompts, repeat it
+                if len(images) == 1 and len(full_texts) > 1:
+                    images = images * len(full_texts)
+
+                # Append EXACTLY ONE placeholder per sample
+                for i in range(len(full_texts)):
+                    full_texts[i] = full_texts[i] + "<|vision_start|><|image_pad|><|vision_end|><|im_end|>"
+
+                # (Optional) if you still want the resize, keep it — but it must operate on tensors
+                images = [F.resize(im, (im.shape[-2] // 2, im.shape[-1] // 2)) for im in images]
 
             inputs = self.processor(
                 text=full_texts,
@@ -144,7 +157,7 @@ class Qwen2_5_VLTextEmbedder:
                 truncation=True,
                 return_tensors="pt",
                 padding=True,
-                max_length=max_length,
+                max_length=None,  # safer when images present
             ).to(self.model.device)
 
             with torch.no_grad():
