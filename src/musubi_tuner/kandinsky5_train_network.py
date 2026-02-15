@@ -511,51 +511,29 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
 
                 # append visual conditioning channels if model expects them (zeros by default)
                 if transformer.visual_cond:
-                    visual_cond = torch.zeros_like(x)
-                    visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=accelerator.device, dtype=x.dtype)
-
+                    visual_cond = torch.zeros_like(x)  # [F,H,W,C]
+                    visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=x.device, dtype=x.dtype)  # [F,H,W,1]
+                
                     cond_lat = None
                     if self._i2v_training:
                         assert "latents_image" in batch, (
                             "latents_image not found in batch; run kandinsky5_cache_latents to populate I2V caches"
                         )
-                        cond_lat = batch["latents_image"][b].to(accelerator.device, dtype=network_dtype)  # C,F,H,W
-                        cond_lat = cond_lat.permute(1, 2, 3, 0)  # F,H,W,C
-                    # Align conditioning frames to match video duration.
-                    if cond_lat is not None and self._i2v_mode == "first_last" and cond_lat.shape[0] >= 2 and x.shape[0] > 1:
-                        # Place first frame at index 0 and last frame at the final index; zero elsewhere.
-                        aligned = torch.zeros((x.shape[0], *cond_lat.shape[1:]), device=cond_lat.device, dtype=cond_lat.dtype)
-                        aligned[0] = cond_lat[0]
-                        aligned[-1] = cond_lat[-1]
-                        cond_lat = aligned
-                    elif cond_lat is not None:
-                        # pad/truncate to match duration
-                        if cond_lat.shape[0] < x.shape[0]:
-                            pad = x.shape[0] - cond_lat.shape[0]
-                            cond_lat = torch.cat(
-                                [
-                                    cond_lat,
-                                    torch.zeros((pad, *cond_lat.shape[1:]), device=cond_lat.device, dtype=cond_lat.dtype),
-                                ],
-                                dim=0,
-                            )
-                        elif cond_lat.shape[0] > x.shape[0]:
-                            cond_lat = cond_lat[: x.shape[0]]
-
+                        # cached as C,F,H,W with F=2 (first+last universal)
+                        cond_lat = batch["latents_image"][b].to(x.device, dtype=network_dtype)
+                        cond_lat = cond_lat.permute(1, 2, 3, 0)  # -> [2,H,W,C] (first, last)
+                
                     if cond_lat is not None:
-                        if self._i2v_mode == "first_last" and cond_lat.shape[0] >= 2:
-                            frame_mask = torch.zeros(cond_lat.shape[0], device=cond_lat.device, dtype=torch.bool)
-                            frame_mask[0] = True
-                            frame_mask[-1] = True
-                        else:
-                            frame_mask = torch.rand(cond_lat.shape[0], device=cond_lat.device) < self.visual_cond_prob
-                            if not frame_mask.any():
-                                frame_mask[0] = True  # ensure at least first frame conditioned
-                        visual_cond[frame_mask] = cond_lat[frame_mask]
-                        visual_cond_mask[frame_mask] = 1
-
+                        # Always condition the first frame
+                        visual_cond[0] = cond_lat[0]
+                        visual_cond_mask[0] = 1
+                
+                        # Optionally condition the last frame too (only if the video has >1 frame)
+                        if self._i2v_mode == "first_last" and x.shape[0] > 1:
+                            visual_cond[-1] = cond_lat[-1]
+                            visual_cond_mask[-1] = 1
+                
                     x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
-
             else:
                 duration = 1
                 height, width = latent_b.shape[-2:]
