@@ -4,7 +4,6 @@
 # Licensed under the MIT License
 import torch
 from PIL import Image
-from torch.distributed import all_gather
 from tqdm import tqdm
 from .models.utils import fast_sta_nabla
 import torchvision.transforms.functional as F

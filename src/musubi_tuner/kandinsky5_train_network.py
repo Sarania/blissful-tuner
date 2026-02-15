@@ -584,7 +584,6 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             text_embed = batch["text_embeds"][b].to(accelerator.device, dtype=network_dtype)
             pooled_embed = batch["pooled_embed"][b].to(accelerator.device, dtype=network_dtype)
 
-
             # latents can be image (C, H, W) or video (C, F, H, W)
             if latent_b.dim() == 4:
                 duration = latent_b.shape[-3]

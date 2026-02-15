@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
         help="Output length in pixel frames, exclusive of '--frames' and will be rounded up to fit 4n + 1 if necessary.",
     )
     parser.add_argument("--steps", type=int, default=None)
-    parser.add_argument("--guidance", type=float, default=None)
+    parser.add_argument("--guidance_scale", type=float, default=None)
     parser.add_argument(
         "--scheduler_scale", type=float, default=None, help="Like flow shift for other models, alters timestep distribution"
     )
@@ -168,7 +168,7 @@ def main():
     steps = args.steps or task_conf.num_steps
     args.steps = steps  # Previewer need
 
-    guidance = args.guidance if args.guidance is not None else task_conf.guidance_weight
+    guidance = args.guidance_scale if args.guidance_scale is not None else task_conf.guidance_weight
     scheduler_scale = args.scheduler_scale if args.scheduler_scale is not None else (task_conf.scheduler_scale or 1.0)
     latent_h = max(1, height // 8)
     latent_w = max(1, width // 8)
