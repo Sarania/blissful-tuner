@@ -276,7 +276,7 @@ class DiffusionTransformer3D(nn.Module):
         if num_blocks <= 0:
             return
 
-        text_to_swap = max(0, min(self.num_text_blocks - 1, num_blocks // 4))
+        text_to_swap = max(0, min(self.num_text_blocks - 2, num_blocks // 4))
         visual_to_swap = max(1, num_blocks - text_to_swap)
         visual_to_swap = min(visual_to_swap, self.num_visual_blocks - 1)
 

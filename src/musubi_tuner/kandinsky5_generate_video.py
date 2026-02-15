@@ -364,6 +364,8 @@ def main():
             dit.enable_block_swap(args.blocks_to_swap, device, supports_backward=False, use_pinned_memory=False)
             dit.move_to_device_except_swap_blocks(device)
             dit.prepare_block_swap_before_forward()
+        else:
+            dit.to(device)
 
         autocast_dtype = torch.bfloat16
 

@@ -1,7 +1,6 @@
 import argparse
 import os
 import json
-import math
 from types import SimpleNamespace
 from typing import Optional
 
@@ -402,72 +401,6 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         logger.info(f"Loading Kandinsky5 sample prompts from {sample_prompts}")
         return load_prompts(sample_prompts)
 
-    def do_inference(
-        self,
-        accelerator,
-        args,
-        sample_parameter,
-        vae,
-        dit_dtype,
-        transformer,
-        discrete_flow_shift,
-        sample_steps,
-        width,
-        height,
-        frame_count,
-        generator,
-        do_classifier_free_guidance,
-        guidance_scale,
-        cfg_scale,
-        image_path=None,
-        control_video_path=None,
-    ):
-        prompt = sample_parameter.get("prompt", "")
-        neg_prompt = sample_parameter.get("negative_prompt", "")
-        duration = frame_count if frame_count is not None else 1
-        # convert pixel dims to latent dims
-        latent_h = height // 8
-        latent_w = width // 8
-
-        text_embedder_conf = SimpleNamespace(
-            qwen=SimpleNamespace(
-                checkpoint_path=self.task_conf.text.qwen_checkpoint,
-                max_length=self.task_conf.text.qwen_max_length,
-            ),
-            clip=SimpleNamespace(
-                checkpoint_path=self.task_conf.text.clip_checkpoint,
-                max_length=self.task_conf.text.clip_max_length,
-            ),
-        )
-
-        text_embedder = get_text_embedder(
-            text_embedder_conf,
-            device=accelerator.device if not getattr(args, "text_encoder_cpu", False) else "cpu",
-            quantized_qwen=getattr(args, "quantized_qwen", False),
-            qwen_auto=getattr(args, "text_encoder_auto", False),
-        )
-
-        images = generation_utils.generate_sample(
-            shape=(1, duration, latent_h, latent_w, self.task_conf.dit_params.in_visual_dim),
-            caption=prompt,
-            dit=transformer,
-            vae=vae,
-            conf=SimpleNamespace(metrics=SimpleNamespace(scale_factor=self.task_conf.scale_factor)),
-            text_embedder=text_embedder,
-            num_steps=sample_steps or self.task_conf.num_steps,
-            guidance_weight=guidance_scale or self.task_conf.guidance_weight,
-            scheduler_scale=self.task_conf.scheduler_scale or 1,
-            negative_caption=neg_prompt,
-            seed=sample_parameter.get("seed", 42),
-            device=accelerator.device,
-            vae_device=accelerator.device,
-            text_embedder_device=accelerator.device,
-            progress=False,
-            offload=False,
-        )
-
-        return images
-
     def load_vae(self, args: argparse.Namespace, vae_dtype: torch.dtype, vae_path: str):
         # Training always uses cached latents, so defer VAE load until sampling time.
         self._vae_checkpoint_path = vae_path or self.task_conf.vae.checkpoint_path
@@ -576,38 +509,19 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 move_to_device = False
                 # quantize on GPU even when block swap is on, but keep weights on CPU afterwards for swap
                 fp8_quant_device = accelerator.device if quant_device == "cpu" else quant_device
-                logger.info(
-                    "blocks_to_swap > 0, quantizing fp8 on GPU and keeping weights on CPU for block swap (all transformer blocks)."
-                )
-            try:
-                # if no blocks to swap, we can move the weights to GPU after optimization on GPU (omit redundant CPU->GPU copy)
-                move_to_device = args.blocks_to_swap == 0  # if blocks_to_swap > 0, we will keep the model on CPU
-                state_dict = model.fp8_optimization(state_dict, fp8_quant_device, move_to_device, use_scaled_mm=args.fp8_fast)
+            state_dict = model.fp8_optimization(state_dict, fp8_quant_device, move_to_device, use_scaled_mm=args.fp8_fast)
+            dit_weight_dtype = None
 
-                info = model.load_state_dict(state_dict, strict=True, assign=True)
-                logger.info(f"Loaded FP8 optimized weights: {info}")
-                dit_weight_dtype = None
-            except Exception as ex:
-                logger.warning(f"fp8 optimization failed ({ex}); proceeding without fp8 for this run.")
-
-        # keep original loading device logic when not using fp8 (supports block swap on CPU load)
-        target_device = "cpu" if blocks_to_swap > 0 else accelerator.device
-        loading_device = target_device
-        quant_device = target_device
-
-        info = model.load_state_dict(state_dict, strict=False, assign=True)
+        info = model.load_state_dict(state_dict, strict=True, assign=True)
         logger.info(f"Loaded DiT weights: {info}")
         # free CPU copy ASAP
         del state_dict
 
         model.attention = SimpleNamespace(**self.task_conf.attention.__dict__)
 
-        model.to(target_device)
         model.dtype = next(model.parameters()).dtype  # align hv_train_network logging expectation
-        model.device = target_device  # align hv_train_network logging expectation
+        model.device = loading_device  # align hv_train_network logging expectation
 
-        if getattr(args, "compile", False):
-            model = self.compile_transformer(args, model)
         return model
 
     def compile_transformer(self, args, transformer):
@@ -657,9 +571,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         targets = []
 
         patch_size = self.dit_conf["patch_size"] if self.dit_conf else (1, 2, 2)
-        attention_conf = getattr(self.task_conf, "attention", SimpleNamespace(chunk=False, chunk_len=None))
-        chunk_len = getattr(attention_conf, "chunk_len", None) or None
-        chunk_mode = bool(attention_conf.chunk and chunk_len and chunk_len > 0)
+
         # ensure the hidden state will require grad
         if args.gradient_checkpointing:
             noisy_model_input.requires_grad_(True)
@@ -671,27 +583,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
 
             text_embed = batch["text_embeds"][b].to(accelerator.device, dtype=network_dtype)
             pooled_embed = batch["pooled_embed"][b].to(accelerator.device, dtype=network_dtype)
-            attention_mask = (
-                batch["attention_mask"][b].to(accelerator.device) if batch.get("attention_mask", None) is not None else None
-            )
-            if attention_mask is not None:
-                attention_mask = attention_mask.bool()
-                if attention_mask.dim() > 1:
-                    attention_mask = attention_mask.reshape(attention_mask.shape[0], -1)
-                else:
-                    attention_mask = attention_mask.unsqueeze(0)
 
-                mask = attention_mask[0] if attention_mask.dim() > 1 else attention_mask
-                mask = mask.bool().flatten()
-                if mask.shape[0] != text_embed.shape[0]:
-                    # Processor returns padded masks; embeds are packed to valid tokens.
-                    # Don't raise here: cache writing already aligns masks to packed embeds.
-                    if mask.sum().item() == text_embed.shape[0]:
-                        mask = mask[mask]
-                    else:
-                        mask = torch.ones((text_embed.shape[0],), dtype=torch.bool)
-                text_embed = text_embed[mask]
-                attention_mask = None
 
             # latents can be image (C, H, W) or video (C, F, H, W)
             if latent_b.dim() == 4:
@@ -746,24 +638,10 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
 
                     x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
 
-                # repeat text embeddings and masks per frame (default) or per chunk
-                repeat_units = math.ceil(duration / chunk_len) if chunk_mode else duration
-                if text_embed.dim() == 3:
-                    text_embed = text_embed.view(-1, text_embed.shape[-1])
-                text_embed = text_embed.unsqueeze(0).repeat(repeat_units, 1, 1).view(-1, text_embed.shape[-1])
-
-                if pooled_embed.dim() == 1:
-                    pooled_embed = pooled_embed.unsqueeze(0)
-                pooled_embed = pooled_embed.repeat(repeat_units, 1)
-
-                if attention_mask is not None:
-                    attention_mask = attention_mask.repeat(repeat_units, 1).reshape(1, 1, -1)
             else:
                 duration = 1
                 height, width = latent_b.shape[-2:]
                 x = noisy_input_b.permute(1, 2, 0).unsqueeze(0)  # C, H, W -> 1, H, W, C
-                if attention_mask is not None:
-                    attention_mask = attention_mask.reshape(1, 1, -1)
                 if transformer.visual_cond:
                     visual_cond = torch.zeros_like(x)
                     visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=accelerator.device, dtype=x.dtype)
@@ -793,7 +671,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                     text_rope_pos,
                     scale_factor=tuple(self.task_conf.scale_factor),
                     sparse_params=sparse_params,
-                    attention_mask=attention_mask,
+                    attention_mask=None,
                 )
 
             # transformer outputs [duration, H, W, C]; align to [duration, C, H, W]
