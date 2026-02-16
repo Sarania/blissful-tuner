@@ -188,43 +188,50 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         latent_w = max(1, width // 8)
         latent_h = max(1, height // 8)
         latent_f = max(1, (frame_count - 1) // 4 + 1)
-        logger.info(f"Debug {width}x{height}x{frame_count} = {latent_w}x{latent_h}x{latent_f}")
+
         text_embeds = sample_parameter["text_embeds"].to(device=device, dtype=dit_dtype)
         pooled_embed = sample_parameter["pooled_embed"].to(device=device, dtype=dit_dtype)
         null_text_embeds = sample_parameter["null_text_embeds"].to(device=device, dtype=dit_dtype)
         null_pooled_embed = sample_parameter["null_pooled_embed"].to(device=device, dtype=dit_dtype)
         seed = sample_parameter.get("seed", random.getrandbits(32))
-        scheduler_scale = sample_parameter.get("discrete_flow_shift", self.task_conf.scheduler_scale or 5.0)
+        scheduler_scale = sample_parameter.get(
+            "discrete_flow_shift", self.task_conf.scheduler_scale or 5.0
+        )  # Ignore 14.5 default by pulling it ourself and defaulting to task conf
         guidance_scale = cfg_scale or self.task_conf.guidance_weight
         conf_ns = SimpleNamespace(model=self.task_conf, metrics=SimpleNamespace(scale_factor=self.task_conf.scale_factor))
         image_path = sample_parameter.get("image_path", None)
+        end_image_path = sample_parameter.get("end_image_path", None)
         i2v_frames = vae_for_sampling = None
 
         if image_path:
-            try:
-                vae_for_sampling = self._load_vae_for_sampling(args, accelerator.device)
-                max_area = 512 * 768 if int(self.task_conf.resolution) == 512 else 1024 * 1024
-                divisibility = 16 if int(self.task_conf.resolution) == 512 else 128
-                _, lat_image, _ = get_first_frame_from_image(
-                    image_path,
+            frame_list = []
+            vae_for_sampling = self._load_vae_for_sampling(args, accelerator.device)
+            max_area = 512 * 768 if int(self.task_conf.resolution) == 512 else 1024 * 1024
+            divisibility = 16 if int(self.task_conf.resolution) == 512 else 128
+            _, start_image, _ = get_first_frame_from_image(
+                image_path,
+                vae_for_sampling,
+                accelerator.device,
+                max_area=max_area,
+                divisibility=divisibility,
+            )
+            frame_list.append(start_image[:1])
+            if end_image_path:
+                _, end_image, _ = get_first_frame_from_image(
+                    end_image_path,
                     vae_for_sampling,
                     accelerator.device,
                     max_area=max_area,
                     divisibility=divisibility,
                 )
-                i2v_frames = lat_image[:1]
-                vae_for_sampling.to("cpu")  # Save for later
-                if i2v_frames is not None:
-                    latent_h = int(i2v_frames.shape[1])
-                    latent_w = int(i2v_frames.shape[2])
-            except Exception as ex:
-                i2v_frames = None
-                logger.warning(
-                    f"Failed to load i2v first frame from image_path='{image_path}': {ex}. Sample will NOT be conditioned by image!"
-                )
+                frame_list.append(end_image[:1])
+            i2v_frames = torch.cat(frame_list, dim=0)
+            vae_for_sampling.to("cpu")  # Save for later
+            if i2v_frames is not None:
+                latent_h = int(i2v_frames.shape[1])
+                latent_w = int(i2v_frames.shape[2])
 
         shape = (1, latent_f, latent_h, latent_w, self.task_conf.dit_params.in_visual_dim)
-
 
         latents = generation_utils.generate_sample_latents_only(
             shape=shape,
@@ -510,7 +517,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 if transformer.visual_cond:
                     visual_cond = torch.zeros_like(x)  # [F,H,W,C]
                     visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=accelerator.device, dtype=network_dtype)  # [F,H,W,1]
-                
+
                     cond_lat = None
                     if self._i2v_training:
                         assert "latents_image" in batch, (
@@ -519,17 +526,17 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                         # cached as C,F,H,W with F=2 (first+last universal)
                         cond_lat = batch["latents_image"][b].to(accelerator.device, dtype=network_dtype)
                         cond_lat = cond_lat.permute(1, 2, 3, 0)  # -> [2,H,W,C] (first, last)
-                
+
                     if cond_lat is not None:
                         # Always condition the first frame
                         visual_cond[0] = cond_lat[0]
                         visual_cond_mask[0] = 1
-                
+
                         # Optionally condition the last frame too (only if the video has >1 frame)
                         if self._i2v_mode == "first_last" and x.shape[0] > 1:
                             visual_cond[-1] = cond_lat[-1]
                             visual_cond_mask[-1] = 1
-                
+
                     x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
             else:
                 duration = 1
