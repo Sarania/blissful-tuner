@@ -50,21 +50,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task", type=str, default="k5-pro-t2v-5s-sd", choices=list(TASK_CONFIGS.keys()))
     parser.add_argument("--prompt", type=str, required=True, help="Prompt for generation")
     parser.add_argument("--negative_prompt", type=str, default="", help="Negative prompt for generation")
-    parser.add_argument(
-        "--i", "--image", dest="image", type=str, default=None, help="Init image path for i2v-style seeding (first frame)"
-    )
+    parser.add_argument("--i", "--image", dest="image", type=str, default=None, help="Init image path for i2v or image edit")
     parser.add_argument(
         "--image_last", type=str, default=None, help="Optional last-frame image path for i2v first_last conditioning"
     )
     parser.add_argument("--save_path", type=str, required=True, help="Folder to save outputs to")
-    parser.add_argument("--width", type=int, default=None, help="Requested width of generated video. Default depends on task.")
-    parser.add_argument("--height", type=int, default=None, help="Requested height of generated video. Default depends on task.")
+    parser.add_argument("--width", type=int, default=None, help="Requested width of generated output. Default depends on task.")
+    parser.add_argument("--height", type=int, default=None, help="Requested height of generated output. Default depends on task.")
     parser.add_argument("--frames", type=int, default=None, help="Output length in latent frames, exclusive of '--video_length'")
     parser.add_argument(
         "--video_length",
         type=int,
         default=None,
-        help="Output length in pixel frames, exclusive of '--frames' and will be rounded up to fit 4n + 1 if necessary.",
+        help="Output length in pixel frames, exclusive of '--frames' and will be rounded up to fit 4n + 1 if necessary. Use 1 for images or image tasks.",
     )
     parser.add_argument(
         "--steps", type=int, default=None, help="Number of inference steps, default depends on task but is often 50"
@@ -88,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device", type=str, default=None, help="Device to use for inference. Default is CUDA if available else CPU"
     )
-    parser.add_argument("--dit", type=str, default=None, help="Path to diffusion transformer to inference")
+    parser.add_argument("--dit", type=str, required=True, help="Path to diffusion transformer to inference")
     parser.add_argument(
         "--vae",
         type=str,

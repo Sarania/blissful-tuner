@@ -505,7 +505,11 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument("--quantized_qwen", action="store_true", help="Quantize Qwen TE to NF4 with BitsAndBytes to save VRAM")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile optimization")
     parser.add_argument(
-        "--output_type", type=str, default="video", choices=["video", "latent", "both"], help="Type of output to produce."
+        "--output_type",
+        type=str,
+        default="video",
+        choices=["video", "latent", "both"],
+        help="Type of output to save, choose 'video' for decoded video/image, latent for latent.safetensors, both for both!",
     )
     parser.add_argument(
         "--fp16_fast",
@@ -542,7 +546,7 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         type=str,
         default="default",
         choices=["default", "dpm++"],
-        help="Scheduler to use for inference, default is probably best right now",
+        help="Scheduler to use for inference, DPM++ can potentially improve outputs slightly but default is usually okay",
     )
     parser.add_argument(
         "--use_nabla_attn",
@@ -553,12 +557,12 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         "--nabla_p",
         type=float,
         default=0.9,
-        help="NABLA P value for when using NABLA. Controls sparsity with lower being more sparse",
+        help="0.0 - 1.0 (float): NABLA P value for when using NABLA. Controls sparsity with lower being more sparse. 0.7 might be good.",
     )
     parser.add_argument(
         "--disable_vae_workaround",
         action="store_true",
-        help="Disables patching the VAE to fix massive OOM on latest PyTorch/CUDA versions. This patch seems not necessary on at least some earlier versions and quality is potentially improved without it.",
+        help="Disables patching the VAE to fix massive OOM on latest PyTorch/CUDA versions. This patch seems not necessary on at least some earlier versions and quality is potentially improved without it, but will use more VRAM.",
     )
     parser.add_argument(
         "--prompt_wildcards",
@@ -571,6 +575,6 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument(
         "--advanced_i2v",
         action="store_true",
-        help="Allow much more freedom when preparing latents for I2V i.e. allow any reasonable res which is divisible by 16 without resizing, automatically resizes input images to requested video res. Not compatible with NABLA",
+        help="Allow much more freedom when preparing latents for I2V or Image Edit i.e. allow any reasonable res which is divisible by 16 without resizing, automatically resizes input images to requested output res. Not compatible with NABLA",
     )
     return parser
