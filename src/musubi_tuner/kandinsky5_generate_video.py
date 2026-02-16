@@ -117,8 +117,14 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Number of transformer blocks to offload to CPU to save VRAM. Default is 0, max depends on which model. Saves VRAM",
     )
-    parser.add_argument("--fp8_scaled", action="store_true", help="Use fp8 scaled quantization to reduce size of DiT and save memory and VRAM")
-    parser.add_argument("--fp8_fast", action="store_true", help="Only available with `--fp8_scaled`, use fast fp8 math available on Ada Lovelace and later Nvidia GPUs")
+    parser.add_argument(
+        "--fp8_scaled", action="store_true", help="Use fp8 scaled quantization to reduce size of DiT and save memory and VRAM"
+    )
+    parser.add_argument(
+        "--fp8_fast",
+        action="store_true",
+        help="Only available with `--fp8_scaled`, use fast fp8 math available on Ada Lovelace and later Nvidia GPUs",
+    )
     parser.add_argument("--disable_numpy_memmap", action="store_true")
     parser.add_argument("--sdpa", action="store_true", help="use SDPA for visual attention")
     parser.add_argument("--flash_attn", action="store_true", help="use FlashAttention 2 for visual attention")
