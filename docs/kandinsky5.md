@@ -270,7 +270,7 @@ For additional options, use `python kandinsky5_train_network.py --help`.
 
 `--fp8_base / --fp8_scaled` runs DiT in fp8 mode. This can significantly reduce memory consumption but may impact output quality.
 
-If you're running low on VRAM, use `--blocks_to_swap` to offload some blocks to CPU.
+If you're running low on VRAM, use `--blocks_to_swap` to offload some blocks to CPU. If you OOM on encoding prompts or caching for TE, try `--text_encoder_auto` or `--text_encoder_cpu` to run part or all of the Qwen TE on CPU.
 
 `--gradient_checkpointing_cpu_offload` can be used to offload activations to CPU when using gradient checkpointing. This must be used together with `--gradient_checkpointing`.
 
@@ -316,7 +316,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --text_encoder_qwen Qwen/Qwen2.5-VL-7B-Instruct \
     --text_encoder_clip openai/clip-vit-large-patch14 \
     --vae path/to/vae/diffusion_pytorch_model.safetensors \
-    --fp8_base \
+    --fp8_base --fp8_scaled \
     --sdpa \
     --gradient_checkpointing \
     --max_data_loader_n_workers 1 \
@@ -359,7 +359,7 @@ I2Vの学習を行う場合は、タスクとチェックポイントをI2V向�
 
 `--fp8_base / --fp8_scaled`を指定すると、DiTがfp8で学習されます。消費メモリを大きく削減できますが、品質は低下する可能性があります。
 
-VRAMが足りない場合は、`--blocks_to_swap`を指定して、一部のブロックをCPUにオフロードしてください。
+VRAMが不足している場合は、`--blocks_to_swap` を使用して一部のブロックを CPU にオフロードしてください。エンコードプロンプトや TE のキャッシュでメモリオーバーフローが発生する場合は、`--text_encoder_auto` または `--text_encoder_cpu` を使用して、Qwen TE の一部またはすべてを CPU で実行してみてください。
 
 `--gradient_checkpointing_cpu_offload`を指定すると、gradient checkpointing使用時にアクティベーションをCPUにオフロードします。`--gradient_checkpointing`と併用する必要があります。
 
@@ -430,12 +430,12 @@ python kandinsky5_generate_video.py \
 - `--steps`: Number of inference steps (defaults from task config)
 - `--guidance_scale`: Guidance scale (defaults from task config)
 - `--seed`: Random seed
-- `--fp8_base`: Run DiT in fp8 mode
+- `--fp8_scaled`: Use fp8 scaled quantization to reduce size of DiT and save memory/VRAM
 - `--blocks_to_swap`: Number of blocks to offload to CPU
 - `--lora_weight`: Path(s) to LoRA weight file(s)
 - `--lora_multiplier`: LoRA multiplier(s)
 
-Additional tasks such as Lite and Image tasks are also available. For additional options, use `python kandinsky5_generate_video.py --help`.
+Additional tasks such as Lite and Image tasks are also available as well as various speed optimizations. For a complete list of available flags, please see `python kandinsky5_generate_video.py --help`.
 
 <details>
 <summary>日本語</summary>
@@ -454,12 +454,12 @@ Additional tasks such as Lite and Image tasks are also available. For additional
 - `--steps`: 推論ステップ数（タスク設定からのデフォルト）
 - `--guidance_scale`: ガイダンススケール（タスク設定からのデフォルト）
 - `--seed`: ランダムシード
-- `--fp8_base`: DiTをfp8モードで実行
+- `--fp8_scaled`: fp8スケールの量子化を使用してDiTのサイズを縮小し、メモリ/VRAMを節約します
 - `--blocks_to_swap`: CPUにオフロードするブロック数
 - `--lora_weight`: LoRA重みファイルへのパス
 - `--lora_multiplier`: LoRA係数
 
-LiteタスクやImageタスクなどの追加タスクも利用可能です。追加オプションについては、`python kandinsky5_generate_video.py --help` を使用してください。
+LiteタスクやImageタスクなどの追加タスクに加え、様々な速度最適化も利用可能です。利用可能なフラグの完全なリストについては、`python kandinsky5_generate_video.py --help` を参照してください。
 
 </details>
 

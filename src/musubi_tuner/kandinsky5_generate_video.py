@@ -9,6 +9,7 @@ from safetensors.torch import load_file, save_file
 from safetensors import safe_open
 from datetime import datetime as datetime
 import time
+from rich_argparse import RichHelpFormatter
 from musubi_tuner.kandinsky5.configs import TASK_CONFIGS, AttentionConfig
 from musubi_tuner.kandinsky5.generation_utils import (
     generate_sample_latents_only,
@@ -43,19 +44,21 @@ def _get_device(device_arg: Optional[str]) -> torch.device:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Kandinsky5 sampling (mirrors training sampler, no training)")
+    parser = argparse.ArgumentParser(
+        description="Kandinsky5 sampling (mirrors training sampler, no training)", formatter_class=RichHelpFormatter
+    )
     parser.add_argument("--task", type=str, default="k5-pro-t2v-5s-sd", choices=list(TASK_CONFIGS.keys()))
-    parser.add_argument("--prompt", type=str, required=True)
-    parser.add_argument("--negative_prompt", type=str, default="")
+    parser.add_argument("--prompt", type=str, required=True, help="Prompt for generation")
+    parser.add_argument("--negative_prompt", type=str, default="", help="Negative prompt for generation")
     parser.add_argument(
         "--i", "--image", dest="image", type=str, default=None, help="Init image path for i2v-style seeding (first frame)"
     )
     parser.add_argument(
         "--image_last", type=str, default=None, help="Optional last-frame image path for i2v first_last conditioning"
     )
-    parser.add_argument("--save_path", type=str, required=True)
-    parser.add_argument("--width", type=int, default=None)
-    parser.add_argument("--height", type=int, default=None)
+    parser.add_argument("--save_path", type=str, required=True, help="Folder to save outputs to")
+    parser.add_argument("--width", type=int, default=None, help="Requested width of generated video. Default depends on task.")
+    parser.add_argument("--height", type=int, default=None, help="Requested height of generated video. Default depends on task.")
     parser.add_argument("--frames", type=int, default=None, help="Output length in latent frames, exclusive of '--video_length'")
     parser.add_argument(
         "--video_length",
@@ -63,23 +66,59 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Output length in pixel frames, exclusive of '--frames' and will be rounded up to fit 4n + 1 if necessary.",
     )
-    parser.add_argument("--steps", type=int, default=None)
-    parser.add_argument("--guidance_scale", type=float, default=None)
     parser.add_argument(
-        "--scheduler_scale", type=float, default=None, help="Like flow shift for other models, alters timestep distribution"
+        "--steps", type=int, default=None, help="Number of inference steps, default depends on task but is often 50"
     )
-    parser.add_argument("--seed", type=str, default="42")
-    parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--dit", type=str, default=None)
-    parser.add_argument("--vae", type=str, default=None)
-    parser.add_argument("--text_encoder_qwen", type=str, default=None)
-    parser.add_argument("--text_encoder_clip", type=str, default=None)
-    parser.add_argument("--dtype", type=str, default=None, choices=[None, "bfloat16", "float16", "float32"])
-    parser.add_argument("--vae_dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"])
-    parser.add_argument("--blocks_to_swap", type=int, default=0)
-    parser.add_argument("--fp8_base", action="store_true")
-    parser.add_argument("--fp8_scaled", action="store_true")
-    parser.add_argument("--fp8_fast", action="store_true")
+    parser.add_argument(
+        "--guidance_scale",
+        type=float,
+        default=None,
+        help="Guidance scale for classifier free guidance. Default is 5.0 for video tasks and 3.5 for image tasks",
+    )
+    parser.add_argument(
+        "--scheduler_scale",
+        type=float,
+        default=None,
+        help="Like flow shift for other models, alters timestep distribution. Default depends on task but is often 10.0 for videos and 3.0 for images.",
+    )
+    parser.add_argument(
+        "--flow_shift", type=float, default=None, help="Same as --scheduler_scale, for convenience. Don't provide both."
+    )
+    parser.add_argument("--seed", type=str, default=None, help="Seed for RNG. Default is random.")
+    parser.add_argument(
+        "--device", type=str, default=None, help="Device to use for inference. Default is CUDA if available else CPU"
+    )
+    parser.add_argument("--dit", type=str, default=None, help="Path to diffusion transformer to inference")
+    parser.add_argument(
+        "--vae",
+        type=str,
+        default=None,
+        help="Path to VAE for encode/decode. Use HunyuanVae for video and Flux vae for image tasks.",
+    )
+    parser.add_argument("--text_encoder_qwen", type=str, required=True, help="Path to QwenVL2.5_7B text encoder")
+    parser.add_argument("--text_encoder_clip", type=str, required=True, help="Path to CLIP text encoder")
+    parser.add_argument(
+        "--dit_dtype",
+        type=str,
+        default=None,
+        choices=[None, "bfloat16", "float16", "float32"],
+        help="Dtype to use for DiT weights. Default is just use them as is unless fp8 is enabled.",
+    )
+    parser.add_argument(
+        "--vae_dtype",
+        type=str,
+        default="bfloat16",
+        choices=["bfloat16", "float16", "float32"],
+        help="Dtype to use for VAE weights. Default of 'bfloat16' is recommemnded.",
+    )
+    parser.add_argument(
+        "--blocks_to_swap",
+        type=int,
+        default=0,
+        help="Number of transformer blocks to offload to CPU to save VRAM. Default is 0, max depends on which model. Saves VRAM",
+    )
+    parser.add_argument("--fp8_scaled", action="store_true", help="Use fp8 scaled quantization to reduce size of DiT and save memory and VRAM")
+    parser.add_argument("--fp8_fast", action="store_true", help="Only available with `--fp8_scaled`, use fast fp8 math available on Ada Lovelace and later Nvidia GPUs")
     parser.add_argument("--disable_numpy_memmap", action="store_true")
     parser.add_argument("--sdpa", action="store_true", help="use SDPA for visual attention")
     parser.add_argument("--flash_attn", action="store_true", help="use FlashAttention 2 for visual attention")
@@ -98,20 +137,29 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
     args = parse_blissful_args(args)
+    if args.fp8_fast and not args.fp8_scaled:
+        raise ValueError("`--fp8_fast` requires `--fp8_scaled` but it is not enabled!")
+
+    if args.flow_shift and not args.scheduler_scale:
+        args.scheduler_scale = args.flow_shift
+    elif args.scheduler_scale and args.flow_shift:
+        logger.warning(
+            "'--scheduler_scale' and '--flow_shift' control the same value, please only provide one. For now, we'll use the value of `--scheduler_scale` ({args.scheduler_scale}) and proceed."
+        )
+
     if sum([args.text_encoder_cpu, args.quantized_qwen, args.text_encoder_auto]) > 1:
         raise ValueError(
             "Only one of '--quantized_qwen', '--text_encoder_cpu', '--text_encoder_auto' may be used at a time but received more than that!"
         )
+
     if args.frames and args.video_length:
         raise ValueError("Only one of '--frames' and '--video_length' is allowed but recieved both!")
 
     if args.video_length is not None:
         original = args.video_length
         corrected = 4 * ((original - 1 + 3) // 4) + 1
-
         if corrected != original:
             logger.warning(f"video_length {original} is invalid; rounding up to {corrected} (4n + 1 required)")
-
         args.video_length = corrected
         args.frames = (corrected - 1) // 4 + 1
     elif args.frames is not None:
@@ -135,7 +183,6 @@ def main():
         if task_conf.attention.type != "flash":
             logger.info("Overriding attention backend to traditional(Flash/Sage/Xformers)!")
             task_conf.attention = AttentionConfig(type="flash", chunk=False, causal=False, local=False, glob=False, window=3)
-
     else:
         if args.compile:
             logger.info("Overriding attention backend to NABLA!")
@@ -307,12 +354,11 @@ def main():
             vae_for_encode.to("cpu")
             del vae_for_encode
             clean_memory_on_device(device)
-        dit_weight_dtype = None if args.fp8_base or args.fp8_scaled else ensure_dtype_form(args.dtype, out_form="torch")
+        dit_weight_dtype = None if args.fp8_scaled else ensure_dtype_form(args.dit_dtype, out_form="torch")
         conf_ns = SimpleNamespace(model=task_conf, metrics=SimpleNamespace(scale_factor=task_conf.scale_factor))
 
         # --- Stage 2: load DiT, sample latents ---
         loader_args = SimpleNamespace(
-            fp8_base=args.fp8_base if not args.lora_weight else None,  # Postpone fp8 until after LoRA if we have one
             fp8_scaled=args.fp8_scaled if not args.lora_weight else None,
             fp8_fast=args.fp8_fast if not args.lora_weight else None,
             blocks_to_swap=args.blocks_to_swap,
@@ -345,7 +391,7 @@ def main():
                 net = lora_kandinsky.create_arch_network_from_weights(mult, lora_sd, unet=dit, for_inference=True)
                 net.merge_to(None, dit, lora_sd, device=dit.device if hasattr(dit, "device") else device, non_blocking=True)
             clean_memory_on_device(device)
-            if args.fp8_base or args.fp8_scaled:
+            if args.fp8_scaled:
                 state_dict = dit.state_dict()
 
                 # if no blocks to swap, we can move the weights to GPU after optimization on GPU (omit redundant CPU->GPU copy)

@@ -404,10 +404,12 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                     sd[key] = tensor
             return sd
 
+        args.fp8_base = False if not hasattr(args, "fp8_base") else args.fp8_base
+        use_fp8 = args.fp8_scaled or args.fp8_base
         self.dit_conf = self._load_dit_config(args)
         # Keep the base model dtype at standard precision even when fp8_base is requested,
         # to match the stable inference loader behavior (fp8 is applied via monkey patch/quantization later).
-        if args.fp8_base and not args.fp8_scaled:
+        if use_fp8:
             dit_weight_dtype = None
         with init_empty_weights():
             model = get_dit(self.dit_conf)
@@ -415,7 +417,6 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 model.to(dit_weight_dtype)
 
         # fp8 weights must live on GPU when possible; adjust quantization device based on swap usage.
-        use_fp8 = args.fp8_scaled or args.fp8_base
         blocks_to_swap = getattr(args, "blocks_to_swap", 0) or 0
         quant_device = accelerator.device if use_fp8 else loading_device
 
@@ -434,7 +435,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             dit_weight_dtype = None
             use_fp8 = False  # skip re-quantization below
         elif use_fp8:
-            logger.info(f"Applying fp8 optimization (scaled={args.fp8_scaled}, base={args.fp8_base}) on {quant_device}")
+            logger.info(f"Applying fp8 optimization on {quant_device}")
             # If block swap is disabled, keep weights on GPU for speed; otherwise keep them on CPU to avoid OOM.
             if blocks_to_swap == 0:
                 move_to_device = True
