@@ -146,6 +146,7 @@ Text encoder output pre-caching is required. Create the cache using the followin
 python kandinsky5_cache_text_encoder_outputs.py \
     --dataset_config path/to/dataset.toml \
     --text_encoder_qwen Qwen/Qwen2.5-VL-7B-Instruct \
+    --text_encoder_auto \
     --text_encoder_clip openai/clip-vit-large-patch14 \
     --batch_size 4
 ```
@@ -241,8 +242,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --output_dir path/to/output \
     --output_name k5_lora \
     --save_every_n_epochs 1 \
-    --max_train_epochs 50 \
-    --scheduler_scale 10.0
+    --max_train_epochs 50 
 ```
 
 For I2V training, switch the task and checkpoint to an I2V preset (e.g., `k5-pro-i2v-5s-sd` with `kandinsky5pro_i2v_sft_5s.safetensors`). The latent cache already stores first and last frame latents (`latents_image`, two frames) when you run `kandinsky5_cache_latents.py`, so the same cache covers both first-only and first+last modes—no extra flags are needed beyond picking an I2V task.
@@ -268,7 +268,7 @@ For additional options, use `python kandinsky5_train_network.py --help`.
 
 `--gradient_checkpointing` enables gradient checkpointing to reduce VRAM usage.
 
-`--fp8_base` runs DiT in fp8 mode. This can significantly reduce memory consumption but may impact output quality.
+`--fp8_base / --fp8_scaled` runs DiT in fp8 mode. This can significantly reduce memory consumption but may impact output quality.
 
 If you're running low on VRAM, use `--blocks_to_swap` to offload some blocks to CPU.
 
@@ -280,13 +280,12 @@ Use `--sdpa`, `--flash_attn`, `--flash3`, `--sage_attn`, or `--xformers` to cont
 
 ### Kandinsky5-specific Options / Kandinsky5固有オプション
 
-- `--scheduler_scale`: Overrides the task's scheduler scaling factor. This affects the timestep schedule used in sampling/inference and is also stored in the task config used during training.
-- `--offload_dit_during_sampling`: Offloads the DiT model to CPU during sampling (sample generation during training, and in `kandinsky5_generate_video.py`) to reduce peak VRAM usage.
+- `text_encoder_auto`: Use device_map='auto' for Qwen TE to avoid OOM issues.
 - `--i` / `--image`: Init image path for i2v-style seeding in `kandinsky5_generate_video.py`.
 
 **NABLA attention (training):**
 
-- `--force_nabla_attention`: Force NABLA attention regardless of the task default.
+- `--use_nabla_attention`: Use NABLA attention.
 - `--nabla_method`: NABLA binarization method (default `topcdf`).
 - `--nabla_P`: CDF threshold (default `0.9`).
 - `--nabla_wT`, `--nabla_wH`, `--nabla_wW`: STA window sizes (defaults `11`, `3`, `3`).
@@ -336,8 +335,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --output_dir path/to/output \
     --output_name k5_lora \
     --save_every_n_epochs 1 \
-    --max_train_epochs 50 \
-    --scheduler_scale 10.0
+    --max_train_epochs 50
 ```
 
 I2Vの学習を行う場合は、タスクとチェックポイントをI2V向けプリセットに変更してください（例: `k5-pro-i2v-5s-sd` と `kandinsky5pro_i2v_sft_5s.safetensors`）。`kandinsky5_cache_latents.py` でlatentをキャッシュする際に、最初のフレームlatent（`latents_image`）も保存されるため、I2V専用の追加フラグは不要です（I2Vタスクを選ぶだけで動作します）。
@@ -359,7 +357,7 @@ I2Vの学習を行う場合は、タスクとチェックポイントをI2V向�
 
 `--gradient_checkpointing`でgradient checkpointingを有効にし、VRAM使用量を削減できます。
 
-`--fp8_base`を指定すると、DiTがfp8で学習されます。消費メモリを大きく削減できますが、品質は低下する可能性があります。
+`--fp8_base / --fp8_scaled`を指定すると、DiTがfp8で学習されます。消費メモリを大きく削減できますが、品質は低下する可能性があります。
 
 VRAMが足りない場合は、`--blocks_to_swap`を指定して、一部のブロックをCPUにオフロードしてください。
 
@@ -371,13 +369,12 @@ VRAMが足りない場合は、`--blocks_to_swap`を指定して、一部のブ�
 
 **Kandinsky5固有オプション**
 
-- `--scheduler_scale`: タスクの`scheduler_scale`を上書きします。サンプリング/推論で使うタイムステップスケジュールに影響します。
-- `--offload_dit_during_sampling`: サンプル生成時（学習中のサンプリング、および `kandinsky5_generate_video.py`）にDiTをCPUへ退避し、ピークVRAMを下げます。
+- `text_encoder_auto`: OOM の問題を回避するには、Qwen TE に device_map='auto' を使用します。
 - `--i` / `--image`: `kandinsky5_generate_video.py` でi2v風の初期画像（1フレーム目のシード）を指定します。
 
 **NABLAアテンション（学習）**
 
-- `--force_nabla_attention`: タスク設定に関係なくNABLAを強制します。
+- `--use_nabla_attention`: タスク設定に関係なくNABLAを強制します。
 - `--nabla_method`: NABLAの二値化メソッド（デフォルト `topcdf`）。
 - `--nabla_P`: CDFしきい値（デフォルト `0.9`）。
 - `--nabla_wT`, `--nabla_wH`, `--nabla_wW`: STAウィンドウ（デフォルト `11`, `3`, `3`）。
@@ -400,23 +397,23 @@ Generate videos using the following command:
 ```bash
 python kandinsky5_generate_video.py \
     --task k5-pro-t2v-5s-sd \
-    --dit path/to/kandinsky5pro_t2v_pretrain_5s.safetensors \
+    --dit path/to/kandinsky5pro_t2v_sft_5s.safetensors \
     --vae path/to/vae/diffusion_pytorch_model.safetensors \
     --text_encoder_qwen Qwen/Qwen2.5-VL-7B-Instruct \
+    --text_encoder_auto \
     --text_encoder_clip openai/clip-vit-large-patch14 \
-    --offload_dit_during_sampling \
-    --fp8_base \
+    --fp8_scaled \
     --dtype bfloat16 \
     --prompt "A cat walks on the grass, realistic style." \
     --negative_prompt "low quality, artifacts" \
-    --frames 17 \
+    --video_length 121 \
     --steps 50 \
-    --guidance 5 \
+    --guidance_scale 5 \
     --scheduler_scale 10 \
     --seed 42 \
     --width 512 \
     --height 512 \
-    --output path/to/output.mp4 \
+    --save_path path/to/output/folder/ \
     --lora_weight path/to/lora.safetensors \
     --lora_multiplier 1.0
 ```
@@ -426,18 +423,19 @@ python kandinsky5_generate_video.py \
 - `--task`: Model configuration
 - `--prompt`: Text prompt for generation
 - `--negative_prompt`: Negative prompt (optional)
-- `--output`: Output file path (.mp4 for video, .png for image)
+- `--save_path`: Output folder path
 - `--width`, `--height`: Output resolution (defaults from task config)
-- `--frames`: Number of frames (defaults from task config)
+- `--video_length`: Number of video frames to generate (exclusive of `--frames`)
+- `--frames`: Number of latent frames to generate (exclusive of `--video_length`)
 - `--steps`: Number of inference steps (defaults from task config)
-- `--guidance`: Guidance scale (defaults from task config)
+- `--guidance_scale`: Guidance scale (defaults from task config)
 - `--seed`: Random seed
 - `--fp8_base`: Run DiT in fp8 mode
 - `--blocks_to_swap`: Number of blocks to offload to CPU
 - `--lora_weight`: Path(s) to LoRA weight file(s)
 - `--lora_multiplier`: LoRA multiplier(s)
 
-For additional options, use `python kandinsky5_generate_video.py --help`.
+Additional tasks such as Lite and Image tasks are also available. For additional options, use `python kandinsky5_generate_video.py --help`.
 
 <details>
 <summary>日本語</summary>
@@ -449,18 +447,19 @@ For additional options, use `python kandinsky5_generate_video.py --help`.
 - `--task`: モデル設定
 - `--prompt`: 生成用のテキストプロンプト
 - `--negative_prompt`: ネガティブプロンプト（オプション）
-- `--output`: 出力ファイルパス（動画は.mp4、画像は.png）
+- `--save_path`: 出力フォルダのパス
 - `--width`, `--height`: 出力解像度（タスク設定からのデフォルト）
-- `--frames`: フレーム数（タスク設定からのデフォルト）
+- `--video_length`: 生成するビデオフレーム数（`--frames` を除く）
+- `--frames`: 生成する潜在フレーム数（`--video_length` を除く）
 - `--steps`: 推論ステップ数（タスク設定からのデフォルト）
-- `--guidance`: ガイダンススケール（タスク設定からのデフォルト）
+- `--guidance_scale`: ガイダンススケール（タスク設定からのデフォルト）
 - `--seed`: ランダムシード
 - `--fp8_base`: DiTをfp8モードで実行
 - `--blocks_to_swap`: CPUにオフロードするブロック数
 - `--lora_weight`: LoRA重みファイルへのパス
 - `--lora_multiplier`: LoRA係数
 
-その他のオプションは `--help` で確認できます。
+LiteタスクやImageタスクなどの追加タスクも利用可能です。追加オプションについては、`python kandinsky5_generate_video.py --help` を使用してください。
 
 </details>
 
