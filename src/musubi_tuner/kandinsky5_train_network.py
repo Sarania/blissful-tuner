@@ -61,10 +61,9 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         if args.task not in TASK_CONFIGS:
             raise ValueError(f"Unknown task '{args.task}'. Available: {list(TASK_CONFIGS.keys())}")
         self.task_conf = TASK_CONFIGS[args.task]
+        from dataclasses import replace
 
-        if getattr(args, "force_nabla_attention", False):
-            from dataclasses import replace
-
+        if getattr(args, "use_nabla_attention", False):
             self.task_conf = replace(
                 self.task_conf,
                 attention=replace(
@@ -84,6 +83,14 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 f"wT={self.task_conf.attention.wT}, wH={self.task_conf.attention.wH}, wW={self.task_conf.attention.wW}, "
                 f"add_sta={self.task_conf.attention.add_sta}"
             )
+        else:
+            self.task_conf = replace(
+                self.task_conf,
+                attention=replace(
+                    self.task_conf.attention, type="flash", chunk=False, causal=False, local=False, glob=False, window=3
+                ),
+            )
+            logger.info("Using traditional attention for training.")
         self.dit_dtype = torch.bfloat16 if args.mixed_precision == "bf16" else torch.float16
         self._i2v_training = "i2v" in args.task
         if self._i2v_training:
@@ -601,7 +608,9 @@ def kandinsky5_setup_parser(parser: argparse.ArgumentParser) -> argparse.Argumen
         help="I2V conditioning mode: first frame only (default) or first+last frame.",
     )
     parser.add_argument(
-        "--force_nabla_attention", action="store_true", help="Force nabla attention for training regardless of task default"
+        "--use_nabla_attention",
+        action="store_true",
+        help="Use NABLA attention for training (Sparse but can have issues and may not be faster). Also inputs must be sized in multiples of 128 instead of 16.",
     )
     parser.add_argument("--nabla_P", type=float, default=0.9, help="CDF threshold P for nabla attention (default 0.9)")
     parser.add_argument("--nabla_wT", type=int, default=11, help="Temporal STA window for nabla attention (default 11)")
