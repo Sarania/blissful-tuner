@@ -220,6 +220,8 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 )
 
         shape = (1, frame_count, latent_h, latent_w, self.task_conf.dit_params.in_visual_dim)
+        guidance_scale = cfg_scale or self.task_conf.guidance_weight
+
         latents = generation_utils.generate_sample_latents_only(
             shape=shape,
             dit=transformer,
@@ -231,7 +233,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             null_attention_mask=None,
             i2v_frames=None,
             num_steps=sample_steps,
-            guidance_weight=guidance_scale or 1.0,
+            guidance_weight=guidance_scale,
             scheduler_scale=scheduler_scale,
             seed=seed,
             device=accelerator.device,
@@ -276,8 +278,9 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                         if p is None:
                             continue
                         if p not in sample_prompts_te_outputs:
-                            logger.info(f"cache Text Encoder outputs for prompt: {p}")
-                            enc_out, _ = text_embedder.encode([p], type_of_content=("video"))
+                            toc = "video" if prompt_dict["frame_count"] > 1 else "image"
+                            logger.info(f"Caching Text Encoder outputs for {toc} prompt: '{p}'")
+                            enc_out, _ = text_embedder.encode([p], type_of_content=toc)
                             sample_prompts_te_outputs[p] = enc_out
             return sample_prompts_te_outputs
 
@@ -461,14 +464,6 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         target_dtype = ensure_dtype_form(target_dtype, out_form="torch")
         disable_vae_workaround = getattr(args, "disable_vae_workaround", False)
         vae = build_vae(vae_conf, vae_dtype=target_dtype, enable_safety=not disable_vae_workaround)
-        # Enable VAE tiling to reduce VRAM during sampling when available.
-        if hasattr(vae, "apply_tiling"):
-            tile = (1, 17, 256, 256)
-            stride = (8, 192, 192)
-            try:
-                vae.apply_tiling(tile, stride)
-            except Exception:
-                pass
         vae = vae.to(device=device, dtype=target_dtype)
         vae.eval()
         return vae
@@ -491,15 +486,13 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
 
         patch_size = self.dit_conf["patch_size"] if self.dit_conf else (1, 2, 2)
 
-        # ensure the hidden state will require grad
-        if args.gradient_checkpointing:
-            noisy_model_input.requires_grad_(True)
-
         for b in range(bsz):
             latent_b = latents[b].to(accelerator.device, dtype=network_dtype)
             noise_b = noise[b].to(accelerator.device, dtype=network_dtype)
             noisy_input_b = noisy_model_input[b].to(accelerator.device, dtype=network_dtype)
-
+            # ensure the hidden state will require grad
+            if args.gradient_checkpointing:
+                noisy_input_b.requires_grad_(True)
             text_embed = batch["text_embeds"][b].to(accelerator.device, dtype=network_dtype)
             pooled_embed = batch["pooled_embed"][b].to(accelerator.device, dtype=network_dtype)
 
@@ -512,7 +505,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 # append visual conditioning channels if model expects them (zeros by default)
                 if transformer.visual_cond:
                     visual_cond = torch.zeros_like(x)  # [F,H,W,C]
-                    visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=x.device, dtype=x.dtype)  # [F,H,W,1]
+                    visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=accelerator.device, dtype=network_dtype)  # [F,H,W,1]
                 
                     cond_lat = None
                     if self._i2v_training:
@@ -520,7 +513,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                             "latents_image not found in batch; run kandinsky5_cache_latents to populate I2V caches"
                         )
                         # cached as C,F,H,W with F=2 (first+last universal)
-                        cond_lat = batch["latents_image"][b].to(x.device, dtype=network_dtype)
+                        cond_lat = batch["latents_image"][b].to(accelerator.device, dtype=network_dtype)
                         cond_lat = cond_lat.permute(1, 2, 3, 0)  # -> [2,H,W,C] (first, last)
                 
                     if cond_lat is not None:
@@ -540,7 +533,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 x = noisy_input_b.permute(1, 2, 0).unsqueeze(0)  # C, H, W -> 1, H, W, C
                 if transformer.visual_cond:
                     visual_cond = torch.zeros_like(x)
-                    visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=accelerator.device, dtype=x.dtype)
+                    visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=accelerator.device, dtype=network_dtype)
                     x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
 
             sparse_params = self._build_sparse_params(x, x.device)
