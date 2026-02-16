@@ -105,7 +105,7 @@ The DiT checkpoint must be set explicitly via `--dit` (this overrides the task's
 
 [Kandinsky 5.0 Video Lite models](https://huggingface.co/collections/kandinskylab/kandinsky-50-video-lite) are technically supported, but were not extensively tested. Community feedback is welcome.
 
-[Kandinsky 5.0 Image Lite models](https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite) are not supported, but support can be implemented if they get active support from the community.
+[Kandinsky 5.0 Image Lite models](https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite) are supported for generation but not yet training.
 
 <details>
 <summary>日本語</summary>
@@ -113,9 +113,9 @@ The DiT checkpoint must be set explicitly via `--dit` (this overrides the task's
 `--task` オプションでタスク設定（アーキテクチャ、attention、解像度、各種デフォルト値）を選択します。
 DiTのチェックポイントは `--dit` で明示的に指定できます（タスクのデフォルトのパスを上書きします）。
 
-Kandinsky 5.0 Video Liteモデル（https://huggingface.co/collections/kandinskylab/kandinsky-50-video-lite）は技術的にはサポートされていますが、十分な動作確認はできていません。問題があればフィードバックをお願いします。
+[Kandinsky 5.0 Video Liteモデル](https://huggingface.co/collections/kandinskylab/kandinsky-50-video-lite) は技術的にはサポートされていますが、十分な動作確認はできていません。問題があればフィードバックをお願いします。
 
-Kandinsky 5.0 Image Liteモデル（https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite）は現在サポートしていませんが、コミュニティからの継続的な要望・協力があれば対応可能です。
+[Kandinsky 5.0 Image Lite モデル](https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite) は生成はサポートされていますが、まだトレーニングはサポートされていません。
 
 </details>
 
