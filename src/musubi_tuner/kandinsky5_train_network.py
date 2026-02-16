@@ -61,13 +61,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         if args.task not in TASK_CONFIGS:
             raise ValueError(f"Unknown task '{args.task}'. Available: {list(TASK_CONFIGS.keys())}")
         self.task_conf = TASK_CONFIGS[args.task]
-        # Override scheduler_scale from CLI if provided
-        if getattr(args, "scheduler_scale", None) is not None:
-            # TaskConfig is a dataclass, so we can replace the field
-            from dataclasses import replace
 
-            self.task_conf = replace(self.task_conf, scheduler_scale=args.scheduler_scale)
-            logger.info(f"Overriding scheduler_scale to {args.scheduler_scale}")
         if getattr(args, "force_nabla_attention", False):
             from dataclasses import replace
 
@@ -599,9 +593,6 @@ def kandinsky5_setup_parser(parser: argparse.ArgumentParser) -> argparse.Argumen
     parser.add_argument("--fp8_scaled", action="store_true", help="use scaled fp8 for DiT / DiTにスケーリングされたfp8を使う")
     parser.add_argument("--text_encoder_qwen", type=str, default=None, help="Override Qwen text encoder path")
     parser.add_argument("--text_encoder_clip", type=str, default=None, help="Override CLIP text encoder path")
-    parser.add_argument("--offload_dit_during_sampling", action="store_true", help="Offload DiT during sampling")
-    parser.add_argument("--no_vae_load", action="store_true", help="Skip loading VAE; use cached scaling factor only")
-    parser.add_argument("--scheduler_scale", type=float, default=None, help="Override scheduler scale (default from task config)")
     parser.add_argument(
         "--i2v_mode",
         type=str,
