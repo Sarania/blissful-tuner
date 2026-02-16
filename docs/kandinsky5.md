@@ -223,7 +223,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --text_encoder_qwen Qwen/Qwen2.5-VL-7B-Instruct \
     --text_encoder_clip openai/clip-vit-large-patch14 \
     --vae path/to/vae/diffusion_pytorch_model.safetensors \
-    --fp8_base \
+    --fp8_base --fp8_scaled \
     --sdpa \
     --gradient_checkpointing \
     --max_data_loader_n_workers 1 \
@@ -239,7 +239,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --network_alpha 32 \
     --timestep_sampling shift \
     --discrete_flow_shift 5.0 \
-    --output_dir path/to/output \
+    --output_dir path/to/output/folder \
     --output_name k5_lora \
     --save_every_n_epochs 1 \
     --max_train_epochs 50 
