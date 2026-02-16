@@ -40,8 +40,8 @@ Download a Pro DiT `.safetensors` checkpoint from the Kandinsky 5.0 Collection (
 
 ### VAE
 
-Kandinsky 5 uses the HunyuanVideo 3D VAE. Download `diffusion_pytorch_model.safetensors` (or `pytorch_model.pt`) from:
-https://huggingface.co/hunyuanvideo-community/HunyuanVideo
+Kandinsky 5 uses the HunyuanVideo 3D VAE for video tasks. Download `diffusion_pytorch_model.safetensors` (or `pytorch_model.pt`) from:
+https://huggingface.co/hunyuanvideo-community/HunyuanVideo . Image generation/edit tasks use [Flux 1 VAE](https://huggingface.co/black-forest-labs/FLUX.1-dev/tree/main/vae), these tasks can't currently be trained.
 
 ### Text Encoders / テキストエンコーダ
 
@@ -78,7 +78,8 @@ Hugging Faceの[Kandinsky 5.0 Collection](https://huggingface.co/collections/ai-
 
 **DiTモデル**: 上記のリポジトリから`.safetensors`ファイルをダウンロードしてください。
 
-**VAE**: Kandinsky 5はHunyuanVideo 3D VAEを使用します。上記リンクから`diffusion_pytorch_model.safetensors`（または`pytorch_model.pt`）をダウンロードしてください。
+**VAE**: Kandinsky 5 は、ビデオ タスクに HunyuanVideo 3D VAE を使用します。以下から `diffusion_pytorch_model.safetensors` (または `pytorch_model.pt`) をダウンロードします。
+https://huggingface.co/hunyuanvideo-community/HunyuanVideo 。画像生成/編集タスクは [Flux 1 VAE](https://huggingface.co/black-forest-labs/FLUX.1-dev/tree/main/vae) を使用します。これらのタスクは現在トレーニングできません。
 
 **テキストエンコーダ**: Qwen2.5-VL-7BとCLIPを使用します。
 
