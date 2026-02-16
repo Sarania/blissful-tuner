@@ -187,15 +187,19 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         device = accelerator.device
         latent_w = max(1, width // 8)
         latent_h = max(1, height // 8)
+        latent_f = max(1, (frame_count - 1) // 4 + 1)
+        logger.info(f"Debug {width}x{height}x{frame_count} = {latent_w}x{latent_h}x{latent_f}")
         text_embeds = sample_parameter["text_embeds"].to(device=device, dtype=dit_dtype)
         pooled_embed = sample_parameter["pooled_embed"].to(device=device, dtype=dit_dtype)
         null_text_embeds = sample_parameter["null_text_embeds"].to(device=device, dtype=dit_dtype)
         null_pooled_embed = sample_parameter["null_pooled_embed"].to(device=device, dtype=dit_dtype)
         seed = sample_parameter.get("seed", random.getrandbits(32))
         scheduler_scale = sample_parameter.get("discrete_flow_shift", self.task_conf.scheduler_scale or 5.0)
+        guidance_scale = cfg_scale or self.task_conf.guidance_weight
         conf_ns = SimpleNamespace(model=self.task_conf, metrics=SimpleNamespace(scale_factor=self.task_conf.scale_factor))
         image_path = sample_parameter.get("image_path", None)
         i2v_frames = vae_for_sampling = None
+
         if image_path:
             try:
                 vae_for_sampling = self._load_vae_for_sampling(args, accelerator.device)
@@ -219,8 +223,8 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                     f"Failed to load i2v first frame from image_path='{image_path}': {ex}. Sample will NOT be conditioned by image!"
                 )
 
-        shape = (1, frame_count, latent_h, latent_w, self.task_conf.dit_params.in_visual_dim)
-        guidance_scale = cfg_scale or self.task_conf.guidance_weight
+        shape = (1, latent_f, latent_h, latent_w, self.task_conf.dit_params.in_visual_dim)
+
 
         latents = generation_utils.generate_sample_latents_only(
             shape=shape,
@@ -231,7 +235,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             null_text_embeds=null_text_embeds,
             null_pooled_embed=null_pooled_embed,
             null_attention_mask=None,
-            i2v_frames=None,
+            i2v_frames=i2v_frames,
             num_steps=sample_steps,
             guidance_weight=guidance_scale,
             scheduler_scale=scheduler_scale,
@@ -249,7 +253,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             vae_for_sampling,
             device=accelerator.device,
             batch_size=shape[0],
-            num_frames=frame_count,
+            num_frames=latent_f,
         )
         vae_for_sampling.to("cpu")
         del vae_for_sampling
