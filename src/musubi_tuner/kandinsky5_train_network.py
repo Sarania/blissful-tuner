@@ -186,6 +186,9 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         control_video_path=None,
     ):
         device = accelerator.device
+        # round width and height to multiples of 16
+        width = (width // 16) * 16
+        height = (height // 16) * 16
         latent_w = max(1, width // 8)
         latent_h = max(1, height // 8)
         latent_f = max(1, (frame_count - 1) // 4 + 1)
