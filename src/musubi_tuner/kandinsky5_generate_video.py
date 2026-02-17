@@ -217,7 +217,7 @@ def main():
     # round width and height to multiples of 16
     width = (width // 16) * 16
     height = (height // 16) * 16
-    frames = args.frames if args.frames is not None else (5 if task_conf.dit_params.visual_cond else 1)
+    frames = args.frames or 5 if task_conf.dit_params.visual_cond else 1
     i2v_mode = "first_last" if args.image_last else "first"
     steps = args.steps or task_conf.num_steps
     args.steps = steps  # Previewer need
