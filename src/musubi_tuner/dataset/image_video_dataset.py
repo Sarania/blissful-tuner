@@ -395,6 +395,30 @@ def save_latent_cache_kandinsky5(
     save_latent_cache_common(item_info, sd, ARCHITECTURE_KANDINSKY5_FULL)
 
 
+def save_latent_cache_kandinsky5_image(
+    item_info: ItemInfo,
+    latent: torch.Tensor,
+    control_latent: Optional[torch.Tensor] = None,
+    scaling_factor: Optional[float] = None,
+):
+    """Kandinsky 5 architecture (image/video), with optional source/control latents for i2v/control."""
+    assert latent.dim() == 3
+
+    F, H, W = 1, latent.shape[1], latent.shape[2]
+
+    dtype_str = dtype_to_str(latent.dtype)
+    sd = {f"latents_{F}x{H}x{W}_{dtype_str}": latent.detach().cpu().contiguous().clone()}
+
+    if control_latent is not None:
+        _, F_ctrl, H_ctrl, W_ctrl = control_latent.shape
+        sd[f"latents_control_{F_ctrl}x{H_ctrl}x{W_ctrl}_{dtype_str}"] = control_latent.detach().cpu().contiguous().clone()
+
+    if scaling_factor is not None:
+        sd["vae_scaling_factor"] = torch.tensor(float(scaling_factor))
+
+    save_latent_cache_common(item_info, sd, ARCHITECTURE_KANDINSKY5_FULL)
+
+
 def save_latent_cache_hunyuan_video_1_5(
     item_info: ItemInfo,
     latent: torch.Tensor,

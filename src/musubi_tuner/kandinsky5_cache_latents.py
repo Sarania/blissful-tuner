@@ -9,6 +9,7 @@ from musubi_tuner.dataset.image_video_dataset import (
     ItemInfo,
     ARCHITECTURE_KANDINSKY5,
     save_latent_cache_kandinsky5,
+    save_latent_cache_kandinsky5_image,
 )
 import musubi_tuner.cache_latents as cache_latents
 from musubi_tuner.kandinsky5.models.vae import build_vae
@@ -34,9 +35,10 @@ def encode_and_save_batch(vae, batch: List[ItemInfo]):
 
         video = torch.from_numpy(data)
         if video.dim() == 3:  # H, W, C -> add temporal dimension
-            video = video.unsqueeze(0)
+            video = video.unsqueeze(0)  # -> 1, H, W, C
+
         videos.append(video)
-        resize_info.append((video.shape[-2], video.shape[-1]))
+        resize_info.append((video.shape[2], video.shape[1]))  # Captures
 
     inputs = torch.stack(videos, dim=0)  # B, F, H, W, C
     inputs = inputs.to(device=vae.device, dtype=vae.dtype)
@@ -78,7 +80,7 @@ def encode_and_save_batch(vae, batch: List[ItemInfo]):
             last = latent[:, -1:, :, :] if latent.shape[1] > 1 else first
             image_latent = torch.cat([first, last], dim=1).clone()
         logger.info(
-            f"Saving cache for item {item.item_key} at {item.latent_cache_path}. latents shape: {latent.shape}, "
+            f"Saving cache for item '{item.item_key}' latents shape: {latent.shape}, "
             f"image_latent (first+last universal): {None if image_latent is None else image_latent.shape}"
             f" (original frame: {resize_info[idx]})"
         )
@@ -87,6 +89,25 @@ def encode_and_save_batch(vae, batch: List[ItemInfo]):
             latent=latent,
             image_latent=image_latent,
             control_latent=None,
+        )
+
+
+def encode_and_save_batch_flux(vae, batch: List[ItemInfo]):
+    if len(batch) == 0:
+        return
+
+    for item in batch:  # item.content == H, W, C np.ndarray
+        image_tensor = torch.from_numpy(item.content).unsqueeze(0).permute(0, 3, 1, 2) / 127.5 - 1.0  # + B, -> B, C, H, W
+        image_tensor = image_tensor.to(vae.device, vae.dtype)
+        enc_out = vae.encode(image_tensor)
+        lat_image = enc_out.latent_dist.sample().squeeze(0).permute(1, 2, 0)  # 1, C, H, W -> H, W, C
+        latent = lat_image * vae.config.scaling_factor
+        logger.info(f"Saving K5 Image Model Cache for item '{item.item_key}' - latents shape: {latent.shape}")
+        save_latent_cache_kandinsky5_image(
+            item_info=item,
+            latent=latent,
+            control_latent=None,
+            scaling_factor=vae.config.scaling_factor,
         )
 
 
@@ -102,11 +123,17 @@ def main():
         action="store_true",
         help="Disables patching the VAE to fix massive OOM on latest PyTorch/CUDA versions. This patch seems not necessary on at least some earlier versions and quality is potentially improved without it.",
     )
+    parser.add_argument(
+        "--image_model_training",
+        action="store_true",
+        help="Use Flux VAE and cache just images for training Kandinsky5 Image Lite. Does not support NABLA resize.",
+    )
     args = parser.parse_args()
 
     device = args.device if args.device is not None else "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
-
+    if args.image_model_training and args.nabla_resize:
+        raise ValueError("Cannot use `--nabla_resize` with `--image_model_trainingn`!")
     blueprint_generator = BlueprintGenerator(ConfigSanitizer())
     logger.info(f"Load dataset config from {args.dataset_config}")
     user_config = config_utils.load_user_config(args.dataset_config)
@@ -121,7 +148,7 @@ def main():
     assert args.vae is not None, "VAE checkpoint is required"
 
     # Build VAE (Hunyuan-based 3D VAE) from Kandinsky weights
-    vae_conf = type("VAEConf", (), {"name": "hunyuan", "checkpoint_path": args.vae})
+    vae_conf = type("VAEConf", (), {"name": "hunyuan" if not args.image_model_training else "flux", "checkpoint_path": args.vae})
     vae = build_vae(vae_conf, enable_safety=not args.disable_vae_workaround)
     if args.nabla_resize:
         # flag to trigger NABLA-friendly resizing in encode_and_save_batch
@@ -139,7 +166,10 @@ def main():
     logger.info(f"Loaded VAE. dtype: {vae.dtype}, device: {vae.device}")
 
     def encode(batch: List[ItemInfo]):
-        encode_and_save_batch(vae, batch)
+        if not args.image_model_training:
+            encode_and_save_batch(vae, batch)
+        else:
+            encode_and_save_batch_flux(vae, batch)
 
     cache_latents.encode_datasets(datasets, encode, args)
 

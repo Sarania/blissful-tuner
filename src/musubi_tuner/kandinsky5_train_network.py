@@ -265,7 +265,9 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             device=accelerator.device,
             batch_size=shape[0],
             num_frames=latent_f,
+            mode="hv" if "2i-" not in args.task else "fx",
         )
+
         vae_for_sampling.to("cpu")
         del vae_for_sampling
 
@@ -513,7 +515,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             pooled_embed = batch["pooled_embed"][b].to(accelerator.device, dtype=network_dtype)
 
             # latents can be image (C, H, W) or video (C, F, H, W)
-            if latent_b.dim() == 4:
+            if latent_b.dim() == 4:  # HV VAE -> Video/Image tasks combined
                 duration = latent_b.shape[-3]
                 height, width = latent_b.shape[-2:]
                 x = noisy_input_b.permute(1, 2, 3, 0)  # C, F, H, W -> F, H, W, C
@@ -543,14 +545,11 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                             visual_cond_mask[-1] = 1
 
                     x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
-            else:
+            else:  # latent is H, W, C = Flux VAE -> Image only task
                 duration = 1
-                height, width = latent_b.shape[-2:]
-                x = noisy_input_b.permute(1, 2, 0).unsqueeze(0)  # C, H, W -> 1, H, W, C
-                if transformer.visual_cond:
-                    visual_cond = torch.zeros_like(x)
-                    visual_cond_mask = torch.zeros((*x.shape[:-1], 1), device=accelerator.device, dtype=network_dtype)
-                    x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
+                height = latent_b.shape[0]
+                width = latent_b.shape[1]
+                x = noisy_input_b.unsqueeze(0)  # -> 1, H, W, C
 
             sparse_params = self._build_sparse_params(x, x.device)
 
@@ -582,11 +581,12 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             # transformer outputs [duration, H, W, C]; align to [duration, C, H, W]
             model_pred = model_pred.permute(0, 3, 1, 2)
             target_d = noise_b - latent_b
-            if target_d.dim() == 4:
+            if target_d.dim() == 4:  # HV
                 # C, F, H, W -> F, C, H, W to match duration
                 target_d = target_d.permute(1, 0, 2, 3)
-            else:
-                target_d = target_d.unsqueeze(0)
+            else:  # FX
+                target_d = target_d.unsqueeze(0).permute(0, 3, 1, 2)  # H, W, C -> 1, C, H, W
+
             preds.append(model_pred)
             targets.append(target_d)
 
