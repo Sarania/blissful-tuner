@@ -95,6 +95,11 @@ def encode_and_save_batch(vae, batch: List[ItemInfo]):
 def encode_and_save_batch_flux(vae, batch: List[ItemInfo]):
     if len(batch) == 0:
         return
+    has_any_control = any(item.control_content is not None for item in batch)
+
+    if has_any_control:
+        if not all(item.control_content is not None and len(item.control_content) == 1 for item in batch):
+            raise ValueError("If control images are included there must be exactly one per item.")
 
     for item in batch:  # item.content == H, W, C np.ndarray
         image_tensor = torch.from_numpy(item.content).unsqueeze(0).permute(0, 3, 1, 2) / 127.5 - 1.0  # + B, -> B, C, H, W
@@ -102,11 +107,23 @@ def encode_and_save_batch_flux(vae, batch: List[ItemInfo]):
         enc_out = vae.encode(image_tensor)
         lat_image = enc_out.latent_dist.sample().squeeze(0).permute(1, 2, 0)  # 1, C, H, W -> H, W, C
         latent = lat_image * vae.config.scaling_factor
-        logger.info(f"Saving K5 Image Model Cache for item '{item.item_key}' - latents shape: {latent.shape}")
+        control_latent = None
+        control_image = item.control_content
+        if control_image is not None:
+            control_image = control_image[0][..., :3]  # ensure RGB, remove alpha if present
+            control_tensor = torch.from_numpy(control_image).unsqueeze(0).permute(0, 3, 1, 2) / 127.5 - 1.0  # + B, -> B, C, H, W
+            control_tensor = control_tensor.to(vae.device, vae.dtype)
+            enc_out = vae.encode(control_tensor)
+            lat_image = enc_out.latent_dist.sample().squeeze(0).permute(1, 2, 0)  # 1, C, H, W -> H, W, C
+            control_latent = lat_image * vae.config.scaling_factor
+
+        logger.info(
+            f"Saving K5 Image Model Cache for item '{item.item_key}' - latents shape: {latent.shape}, has_control: {control_latent is not None}"
+        )
         save_latent_cache_kandinsky5_image(
             item_info=item,
             latent=latent,
-            control_latent=None,
+            control_latent=control_latent,
             scaling_factor=vae.config.scaling_factor,
         )
 

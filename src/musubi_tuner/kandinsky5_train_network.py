@@ -5,8 +5,8 @@ from typing import Optional
 import random
 import torch
 from accelerate import Accelerator, init_empty_weights
+from torchvision.transforms.functional import pil_to_tensor
 from musubi_tuner.utils.safetensors_utils import MemoryEfficientSafeOpen
-
 from musubi_tuner.dataset.image_video_dataset import ARCHITECTURE_KANDINSKY5, ARCHITECTURE_KANDINSKY5_FULL
 from musubi_tuner.hv_train_network import (
     NetworkTrainer,
@@ -191,42 +191,51 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         height = (height // 16) * 16
         latent_w = max(1, width // 8)
         latent_h = max(1, height // 8)
-        latent_f = max(1, (frame_count - 1) // 4 + 1)
+        is_flux_vae = self.task_conf.vae.name == "flux"
+        latent_f = max(1, (frame_count - 1) // 4 + 1) if not is_flux_vae else 1  # Don't try to make videos with Flux
 
         text_embeds = sample_parameter["text_embeds"].to(device=device, dtype=dit_dtype)
         pooled_embed = sample_parameter["pooled_embed"].to(device=device, dtype=dit_dtype)
         null_text_embeds = sample_parameter["null_text_embeds"].to(device=device, dtype=dit_dtype)
         null_pooled_embed = sample_parameter["null_pooled_embed"].to(device=device, dtype=dit_dtype)
+
         seed = sample_parameter.get("seed", random.getrandbits(32))
         scheduler_scale = sample_parameter.get(
             "discrete_flow_shift", self.task_conf.scheduler_scale or 5.0
         )  # Ignore 14.5 default by pulling it ourself and defaulting to task conf
         guidance_scale = cfg_scale or self.task_conf.guidance_weight
         conf_ns = SimpleNamespace(model=self.task_conf, metrics=SimpleNamespace(scale_factor=self.task_conf.scale_factor))
-        image_path = sample_parameter.get("image_path", None)
-        end_image_path = sample_parameter.get("end_image_path", None)
+
+        if not is_flux_vae:  # Hunyuan VAE -> First+last universal storage for I2V
+            image_path = sample_parameter.get("image_path", None)
+            end_image_path = sample_parameter.get("end_image_path", None)
+        else:  # Flux VAE, if an image exists for i2i it's in control_image_path
+            image_path = sample_parameter.get("control_image_path", None)
+
         i2v_frames = vae_for_sampling = None
 
         if image_path:
             frame_list = []
             vae_for_sampling = self._load_vae_for_sampling(args, accelerator.device)
             max_area = 512 * 768 if int(self.task_conf.resolution) == 512 else 1024 * 1024
-            divisibility = 16 if int(self.task_conf.resolution) == 512 else 128
+            divisibility = 16 if not args.use_nabla_attention else 128
             _, start_image, _ = get_first_frame_from_image(
                 image_path,
                 vae_for_sampling,
                 accelerator.device,
                 max_area=max_area,
                 divisibility=divisibility,
+                is_flux_vae=is_flux_vae,
             )
             frame_list.append(start_image[:1])
-            if end_image_path:
+            if not is_flux_vae and end_image_path:
                 _, end_image, _ = get_first_frame_from_image(
                     end_image_path,
                     vae_for_sampling,
                     accelerator.device,
                     max_area=max_area,
                     divisibility=divisibility,
+                    is_flux_vae=False,
                 )
                 frame_list.append(end_image[:1])
             i2v_frames = torch.cat(frame_list, dim=0)
@@ -255,7 +264,9 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             conf=conf_ns,
             progress=False,
             blissful_args=None,
+            image_edit=args.task == "k5-lite-i2i-hd" and i2v_frames is not None,
         )
+
         vae_for_sampling = self._load_vae_for_sampling(args, accelerator.device) if vae_for_sampling is None else vae_for_sampling
         vae_for_sampling.to(device)
         vae_for_sampling.eval()
@@ -265,7 +276,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             device=accelerator.device,
             batch_size=shape[0],
             num_frames=latent_f,
-            mode="hv" if "2i-" not in args.task else "fx",
+            mode="fx" if is_flux_vae else "hv",
         )
 
         vae_for_sampling.to("cpu")
@@ -289,15 +300,26 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             sample_prompts_te_outputs = {}  # (prompt) -> (embeds, mask)
             with accelerator.autocast(), torch.no_grad():
                 for prompt_dict in prompts:
-                    if "negative_prompt" not in prompt_dict:
-                        prompt_dict["negative_prompt"] = "low quality, bad quality"
-                    for p in [prompt_dict.get("prompt", ""), prompt_dict.get("negative_prompt", None)]:
+                    for p in [prompt_dict.get("prompt", ""), prompt_dict.get("negative_prompt", "low quality, bad quality")]:
                         if p is None:
                             continue
                         if p not in sample_prompts_te_outputs:
-                            toc = "video" if prompt_dict["frame_count"] > 1 else "image"
-                            logger.info(f"Caching Text Encoder outputs for {toc} prompt: '{p}'")
-                            enc_out, _ = text_embedder.encode([p], type_of_content=toc)
+                            toc = (
+                                "video"
+                                if prompt_dict.get("frame_count", 1) > 1
+                                else "image"
+                                if args.task != "k5-lite-i2i-hd"
+                                else "image_edit"
+                            )
+                            te_image = te_image_path = None
+                            if toc == "image_edit":
+                                te_image_path = prompt_dict.get("control_image_path", None)
+                                if te_image_path is not None:
+                                    te_image = pil_to_tensor(generation_utils._to_pil(te_image_path[0]))
+                            logger.info(
+                                f"Caching Text Encoder outputs for {toc} prompt: '{p}' {f' control_path:  {te_image_path}' if te_image_path is not None else ''}"
+                            )
+                            enc_out, _ = text_embedder.encode([p], te_image, type_of_content=toc)
                             sample_prompts_te_outputs[p] = enc_out
             return sample_prompts_te_outputs
 
@@ -329,11 +351,14 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         for prompt_dict in prompts:
             prompt_dict_copy = prompt_dict.copy()
 
-            p = prompt_dict.get("prompt", "")
+            p = prompt_dict.get("prompt", "") or ""
+            neg = prompt_dict.get("negative_prompt", "low quality, bad quality")
+
             prompt_dict_copy["text_embeds"] = te_outputs_1[p]["text_embeds"]
             prompt_dict_copy["pooled_embed"] = te_outputs_1[p]["pooled_embed"]
-            prompt_dict_copy["null_text_embeds"] = te_outputs_1[p]["text_embeds"]
-            prompt_dict_copy["null_pooled_embed"] = te_outputs_1[p]["pooled_embed"]
+
+            prompt_dict_copy["null_text_embeds"] = te_outputs_1[neg]["text_embeds"]
+            prompt_dict_copy["null_pooled_embed"] = te_outputs_1[neg]["pooled_embed"]
 
             sample_parameters.append(prompt_dict_copy)
 
@@ -549,7 +574,13 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                 duration = 1
                 height = latent_b.shape[0]
                 width = latent_b.shape[1]
-                x = noisy_input_b.unsqueeze(0)  # -> 1, H, W, C
+                x = noisy_input_b.unsqueeze(0)  # [1, H, W, C]
+
+                latents_control = batch.get("latents_control", None)  # [H, W, C]
+                if latents_control is not None and transformer.instruct_type == "channel":
+                    latents_control = latents_control[b].to(device=x.device, dtype=x.dtype)
+                    edit_latent = torch.cat([latents_control.unsqueeze(0), torch.ones_like(x[..., :1])], dim=-1)  # [1,H,W,C+1]
+                    x = torch.cat([x, edit_latent], dim=-1)  # [1,H,W, 2C+1]
 
             sparse_params = self._build_sparse_params(x, x.device)
 

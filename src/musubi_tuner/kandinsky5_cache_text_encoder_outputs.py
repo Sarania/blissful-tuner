@@ -1,7 +1,8 @@
 import os
 from types import SimpleNamespace
 import torch
-
+import argparse
+from torchvision.transforms.functional import pil_to_tensor
 from musubi_tuner.dataset import config_utils
 from musubi_tuner.dataset.config_utils import BlueprintGenerator, ConfigSanitizer
 from musubi_tuner.dataset.image_video_dataset import (
@@ -10,6 +11,7 @@ from musubi_tuner.dataset.image_video_dataset import (
     ItemInfo,
     save_text_encoder_output_cache_kandinsky5,
 )
+from musubi_tuner.kandinsky5.generation_utils import _to_pil
 import musubi_tuner.cache_text_encoder_outputs as cache_text_encoder_outputs
 from musubi_tuner.kandinsky5.models.text_embedders import get_text_embedder
 from musubi_tuner.utils import safetensors_utils
@@ -36,16 +38,23 @@ def _ensure_cache_architecture(item: ItemInfo):
         os.remove(path)
 
 
-def encode_and_save_batch(text_embedder, batch: list[ItemInfo], device: torch.device):
+def encode_and_save_batch(text_embedder, batch: list[ItemInfo], device: torch.device, args: argparse.Namespace):
     prompts = [item.caption for item in batch]
+    te_images = (
+        [None for item in batch] if not args.image_edit_training else [pil_to_tensor(_to_pil(item.item_key)) for item in batch]
+    )
     # Keep the cache encoder aligned with training/inference: use video template when the batch contains videos.
     # This originally checked item.frame_count to tell the difference but it's None here, so check by filename seems best we can do - BS
     video_exts = (".mp4", ".mkv", ".webm", ".avi", ".mov")
 
     is_video_batch = any(item.item_key.lower().endswith(video_exts) for item in batch)
 
-    content_type = "video" if is_video_batch else "image"
-    embeds, cu_seqlens = text_embedder.encode(prompts, type_of_content=content_type)
+    if args.image_edit_training:
+        content_type = "image_edit"
+    else:
+        content_type = "video" if is_video_batch else "image"
+
+    embeds, cu_seqlens = text_embedder.encode(prompts, te_images, type_of_content=content_type)
 
     text_embeds = embeds["text_embeds"].to("cpu")
     pooled_embed = embeds["pooled_embed"].to("cpu")
@@ -80,7 +89,9 @@ def main():
     parser.add_argument("--quantized_qwen", action="store_true", help="Load Qwen text encoder in 4bit mode")
     parser.add_argument("--text_encoder_cpu", action="store_true", help="Run Qwen TE on CPU")
     parser.add_argument("--text_encoder_auto", action="store_true", help="Run Qwen with device_map=auto")
-
+    parser.add_argument(
+        "--image_edit_training", action="store_true", help="Encode for text encoder using Image Edit template and show TE the image"
+    )
     args = parser.parse_args()
     if sum([args.text_encoder_cpu, args.quantized_qwen, args.text_encoder_auto]) > 1:
         raise ValueError(
@@ -111,7 +122,7 @@ def main():
     )
 
     def encode_for_text_encoder(batch: list[ItemInfo]):
-        encode_and_save_batch(text_embedder, batch, device)
+        encode_and_save_batch(text_embedder, batch, device, args)
 
     cache_text_encoder_outputs.process_text_encoder_batches(
         args.num_workers,

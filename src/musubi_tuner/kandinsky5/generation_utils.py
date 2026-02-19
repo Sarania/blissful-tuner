@@ -340,10 +340,10 @@ def generate_sample_latents_only(
     progress=False,
     i2v_mode=None,  # unused; kept for call-site compatibility
     blissful_args=None,
+    image_edit=False,
 ):
     """Minimal sampler that returns latents only (no VAE decode)."""
     bs, duration, height, width, dim = shape
-    args = None if blissful_args is None else blissful_args["args"]
     g = torch.Generator(device=device)
     g.manual_seed(seed)
     img = torch.randn(bs * duration, height, width, dim, device=device, generator=g, dtype=_GLOBAL_DTYPE)
@@ -366,9 +366,7 @@ def generate_sample_latents_only(
     if blissful_args is not None:
         blissful_args["first_noise"] = img
 
-    image_edit = False
-    if args is not None and "k5-lite-i2i" in args.task:
-        image_edit = True
+    if image_edit:
         if dit.instruct_type == "channel":
             image = None if i2v_frames is None else i2v_frames[0:1]
             if image is not None:

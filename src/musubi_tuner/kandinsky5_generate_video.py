@@ -287,6 +287,7 @@ def main():
             type_of_content=("video" if frames > 1 else "image" if not image_edit else "image_edit"),
             use_system=True,
         )
+
         text_embeds = enc_out["text_embeds"].to("cpu")
         pooled_embed = enc_out["pooled_embed"].to("cpu")
         null_text_embeds = neg_out["text_embeds"].to("cpu")
@@ -459,7 +460,9 @@ def main():
                 progress=True,
                 i2v_mode=i2v_mode,
                 blissful_args=blissful_args,
+                image_edit=image_edit,
             )
+
         # free DiT
         dit.to("cpu")
         del dit
@@ -477,10 +480,7 @@ def main():
             images = decode_latents(
                 latents, vae, device=device, batch_size=shape[0], num_frames=frames, mode="hv" if "2i-" not in args.task else "fx"
             )
-            try:
-                vae.to("cpu")
-            except Exception:
-                pass
+            vae.to("cpu")
             del vae
         clean_memory_on_device(device)
     # Save

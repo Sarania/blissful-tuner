@@ -410,7 +410,7 @@ def save_latent_cache_kandinsky5_image(
     sd = {f"latents_{F}x{H}x{W}_{dtype_str}": latent.detach().cpu().contiguous().clone()}
 
     if control_latent is not None:
-        _, F_ctrl, H_ctrl, W_ctrl = control_latent.shape
+        F_ctrl, H_ctrl, W_ctrl = control_latent.shape
         sd[f"latents_control_{F_ctrl}x{H_ctrl}x{W_ctrl}_{dtype_str}"] = control_latent.detach().cpu().contiguous().clone()
 
     if scaling_factor is not None:
@@ -555,10 +555,10 @@ def save_text_encoder_output_cache_kandinsky5(
     """Kandinsky 5 architecture."""
     sd = {}
     dtype_str = dtype_to_str(text_embeds.dtype)
-    sd[f"text_embeds_{dtype_str}"] = text_embeds.detach().cpu()
+    sd[f"varlen_text_embeds_{dtype_str}"] = text_embeds.detach().cpu()
     dtype_str = dtype_to_str(pooled_embed.dtype)
-    sd[f"pooled_embed_{dtype_str}"] = pooled_embed.detach().cpu()
-    sd["attention_mask"] = attention_mask.detach().cpu()
+    sd[f"varlen_pooled_embed_{dtype_str}"] = pooled_embed.detach().cpu()
+    sd["varlen_attention_mask"] = attention_mask.detach().cpu()
 
     save_text_encoder_output_cache_common(item_info, sd, ARCHITECTURE_KANDINSKY5_FULL)
 
