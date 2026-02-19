@@ -8,7 +8,7 @@ This is an unofficial training and inference script for [Kandinsky 5](https://gi
 
 - fp8 support and memory reduction by block swap
 - Inference without installing Flash attention (using PyTorch's scaled dot product attention)
-- LoRA training for text-to-video (T2V) and image-to-video (I2V, Pro) models
+- LoRA training for text-to-video (T2V), image-to-video (I2V, Pro) models, and Image (T2I, Edit) models
 
 This feature is experimental.
 
@@ -21,7 +21,7 @@ This feature is experimental.
 
 - fp8対応およびblock swapによる省メモリ化
 - Flash attentionのインストールなしでの実行（PyTorchのscaled dot product attentionを使用）
-- テキストから動画（T2V）および画像から動画（I2V、Pro）モデルのLoRA学習
+- テキストからビデオへの変換 (T2V)、画像からビデオへの変換 (I2V、Pro) モデル、および画像 (T2I、Edit) モデルの LoRA トレーニング
 
 この機能は実験的なものです。
 
@@ -41,7 +41,7 @@ Download a Pro DiT `.safetensors` checkpoint from the Kandinsky 5.0 Collection (
 ### VAE
 
 Kandinsky 5 uses the HunyuanVideo 3D VAE for video tasks. Download `diffusion_pytorch_model.safetensors` (or `pytorch_model.pt`) from:
-https://huggingface.co/hunyuanvideo-community/HunyuanVideo . Image generation/edit tasks use [Flux 1 VAE](https://huggingface.co/black-forest-labs/FLUX.1-dev/tree/main/vae), these tasks can't currently be trained.
+https://huggingface.co/hunyuanvideo-community/HunyuanVideo . Image generation/edit tasks use [Flux 1 VAE](https://huggingface.co/black-forest-labs/FLUX.1-dev/tree/main/vae)
 
 ### Text Encoders / テキストエンコーダ
 
@@ -79,7 +79,7 @@ Hugging Faceの[Kandinsky 5.0 Collection](https://huggingface.co/collections/ai-
 **DiTモデル**: 上記のリポジトリから`.safetensors`ファイルをダウンロードしてください。
 
 **VAE**: Kandinsky 5 は、ビデオ タスクに HunyuanVideo 3D VAE を使用します。以下から `diffusion_pytorch_model.safetensors` (または `pytorch_model.pt`) をダウンロードします。
-https://huggingface.co/hunyuanvideo-community/HunyuanVideo 。画像生成/編集タスクは [Flux 1 VAE](https://huggingface.co/black-forest-labs/FLUX.1-dev/tree/main/vae) を使用します。これらのタスクは現在トレーニングできません。
+https://huggingface.co/hunyuanvideo-community/HunyuanVideo 。画像生成/編集タスクでは[Flux 1 VAE](https://huggingface.co/black-forest-labs/FLUX.1-dev/tree/main/vae)を使用します。
 
 **テキストエンコーダ**: Qwen2.5-VL-7BとCLIPを使用します。
 
@@ -106,7 +106,7 @@ The DiT checkpoint must be set explicitly via `--dit` (this overrides the task's
 
 [Kandinsky 5.0 Video Lite models](https://huggingface.co/collections/kandinskylab/kandinsky-50-video-lite) are technically supported, but were not extensively tested. Community feedback is welcome.
 
-[Kandinsky 5.0 Image Lite models](https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite) are supported for generation but not yet training.
+[Kandinsky 5.0 Image Lite models](https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite) are also supported but not extensively tested.
 
 <details>
 <summary>日本語</summary>
@@ -116,7 +116,7 @@ DiTのチェックポイントは `--dit` で明示的に指定できます（�
 
 [Kandinsky 5.0 Video Liteモデル](https://huggingface.co/collections/kandinskylab/kandinsky-50-video-lite) は技術的にはサポートされていますが、十分な動作確認はできていません。問題があればフィードバックをお願いします。
 
-[Kandinsky 5.0 Image Lite モデル](https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite) は生成はサポートされていますが、まだトレーニングはサポートされていません。
+[Kandinsky 5.0 Image Lite モデル](https://huggingface.co/collections/kandinskylab/kandinsky-50-image-lite) もサポートされていますが、十分にテストされていません。
 
 </details>
 
@@ -129,6 +129,8 @@ Pre-caching is required before training. This involves caching both latents and 
 - You must cache **text encoder outputs** with `kandinsky5_cache_text_encoder_outputs.py` before training.
 - `--text_encoder_qwen` / `--text_encoder_clip` are Hugging Face Transformers models: pass a model ID (recommended) or a local HF snapshot directory.
 - For I2V tasks, the latent cache stores both first and last frame latents (`latents_image`, always two frames) when running `kandinsky5_cache_latents.py`—one cache works for both first-only and first+last conditioning.
+- If you want to train image models (T2I/I2I), you MUST use the Flux VAE and provide `--image_model_training` to `kandinsky5_cache_latents.py`!
+- If you want to train image_edit (I2I), you MUST specify `--image_edit_training` to `'kandinsky5_cache_text_encoder_outputs.py` for the text encoder to see the image properly. Do NOT do this for any other mode including T2I or quality will degrade severely.
 
 <details>
 <summary>日本語</summary>
@@ -136,6 +138,8 @@ Pre-caching is required before training. This involves caching both latents and 
 - 学習前に、`kandinsky5_cache_text_encoder_outputs.py` による **テキストエンコーダ出力のキャッシュ** が必須です。
 - `--text_encoder_qwen` / `--text_encoder_clip` はHugging Face Transformersのモデルです。モデルID（推奨）またはローカルのHF snapshotディレクトリを指定してください。
 - I2Vタスクでは、`kandinsky5_cache_latents.py` 実行時に最初と最後のフレームlatent（`latents_image`、常に2フレーム）もキャッシュされます。1回のキャッシュで first / first+last 両方のモードに対応できます。
+- 画像モデル (T2I/I2I) をトレーニングする場合は、Flux VAE を使用し、`kandinsky5_cache_latents.py` に `--image_model_training` を指定する必要があります。
+- image_edit (I2I) を学習させる場合、テキストエンコーダが画像を正しく認識できるように、`'kandinsky5_cache_text_encoder_outputs.py` に `--image_edit_training` を指定する必要があります。T2I を含む他のモードでは、この操作を行わないでください。そうしないと、画質が著しく低下します。
 
 </details>
 
@@ -152,7 +156,7 @@ python kandinsky5_cache_text_encoder_outputs.py \
     --batch_size 4
 ```
 
-Adjust `--batch_size` according to your available VRAM.
+Adjust `--batch_size` according to your available VRAM. Add `--image_edit_training` ONLY when training for image edit mode.
 
 For additional options, use `python kandinsky5_cache_text_encoder_outputs.py --help`.
 
@@ -161,7 +165,7 @@ For additional options, use `python kandinsky5_cache_text_encoder_outputs.py --h
 
 テキストエンコーダ出力の事前キャッシュは必須です。上のコマンド例を使用してキャッシュを作成してください。
 
-使用可能なVRAMに合わせて `--batch_size` を調整してください。
+使用可能なVRAMに合わせて `--batch_size` を調整してください。画像編集モードのトレーニングを行う場合のみ、`--image_edit_training` を追加します。
 
 その他のオプションは `--help` で確認できます。
 
@@ -186,7 +190,7 @@ python kandinsky5_cache_latents.py \
     --nabla_resize
 ```
 
-If you're running low on VRAM, lower the `--batch_size`.
+If you're running low on VRAM, lower the `--batch_size`. If you want to train T2I/I2I, you MUST specify `--image_model_training` here! For image_edit (I2I) training, the `control_images` in the dataset config are used as the reference(ground truth) image. See [Dataset Config](./dataset_config.md#sample-for-image-dataset-with-control-images) for details.
 
 For additional options, use `python kandinsky5_cache_latents.py --help`.
 
@@ -195,7 +199,7 @@ For additional options, use `python kandinsky5_cache_latents.py --help`.
 
 latentの事前キャッシュは必須です。上のコマンド例を使用してキャッシュを作成してください。
 
-VRAMが足りない場合は、`--batch_size`を小さくしてください。
+VRAMが足りない場合は、`--batch_size`を小さくしてください。T2I/I2I をトレーニングする場合は、ここでも `--image_model_training` を指定する必要があります。image_edit (I2I) トレーニングでは、データセット設定の `control_images` が参照画像（グラウンドトゥルース画像）として使用されます。詳細は [データセット設定](./dataset_config.md#sample-for-image-dataset-with-control-images) を参照してください。
 
 NABLAで学習する場合は、NABLA互換のlatentキャッシュを作成することを推奨します：
 
@@ -220,7 +224,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --mixed_precision bf16 \
     --dataset_config path/to/dataset.toml \
     --task k5-pro-t2v-5s-sd \
-    --dit path/to/kandinsky5pro_t2v_pretrain_5s.safetensors \
+    --dit path/to/kandinsky5pro_t2v_sft_5s.safetensors \
     --text_encoder_qwen Qwen/Qwen2.5-VL-7B-Instruct \
     --text_encoder_clip openai/clip-vit-large-patch14 \
     --vae path/to/vae/diffusion_pytorch_model.safetensors \
@@ -246,7 +250,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --max_train_epochs 50 
 ```
 
-For I2V training, switch the task and checkpoint to an I2V preset (e.g., `k5-pro-i2v-5s-sd` with `kandinsky5pro_i2v_sft_5s.safetensors`). The latent cache already stores first and last frame latents (`latents_image`, two frames) when you run `kandinsky5_cache_latents.py`, so the same cache covers both first-only and first+last modes—no extra flags are needed beyond picking an I2V task.
+For I2V training, switch the task and checkpoint to an I2V preset (e.g., `k5-pro-i2v-5s-sd` with `kandinsky5pro_i2v_sft_5s.safetensors`). The latent cache already stores first and last frame latents (`latents_image`, two frames) when you run `kandinsky5_cache_latents.py`, so the same cache covers both first-only and first+last modes—no extra flags are needed beyond picking an I2V task. For image models (T2I or I2I), make sure to use the Flux VAE and set the appropriate task (`k5-lite-t2i-hd` or `k5_lite_i2i_hd`) here, as well as passing `--image_model_training` to `kandinsky5_cache_latents.py` when caching the latents in the previous step.
 
 **Note on first+last frame conditioning**: First+last frame training support is experimental. The effectiveness and plausibility of this approach have not yet been thoroughly tested. Feedback and results from community testing are welcome.
 
@@ -339,7 +343,7 @@ accelerate launch --num_cpu_threads_per_process 1 --mixed_precision bf16 \
     --max_train_epochs 50
 ```
 
-I2Vの学習を行う場合は、タスクとチェックポイントをI2V向けプリセットに変更してください（例: `k5-pro-i2v-5s-sd` と `kandinsky5pro_i2v_sft_5s.safetensors`）。`kandinsky5_cache_latents.py` でlatentをキャッシュする際に、最初のフレームlatent（`latents_image`）も保存されるため、I2V専用の追加フラグは不要です（I2Vタスクを選ぶだけで動作します）。
+I2Vの学習を行う場合は、タスクとチェックポイントをI2V向けプリセットに変更してください（例: `k5-pro-i2v-5s-sd` と `kandinsky5pro_i2v_sft_5s.safetensors`）。`kandinsky5_cache_latents.py` でlatentをキャッシュする際に、最初のフレームlatent（`latents_image`）も保存されるため、I2V専用の追加フラグは不要です（I2Vタスクを選ぶだけで動作します）。画像モデル (T2I または I2I) の場合は、必ず Flux VAE を使用して適切なタスク (`k5-lite-t2i-hd` または `k5_lite_i2i_hd`) を設定し、前の手順で潜在変数をキャッシュするときに `--image_model_training` を `kandinsky5_cache_latents.py` に渡すようにしてください。
 
 **最初と最後のフレーム条件付けについて**: 最初と最後のフレーム学習サポートは実験的なものです。このアプローチの有効性と妥当性はまだ十分にテストされていません。コミュニティからのフィードバックと結果をお待ちしています。
 

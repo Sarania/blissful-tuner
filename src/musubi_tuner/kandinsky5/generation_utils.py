@@ -211,7 +211,6 @@ def get_velocity(
     null_attention_mask=None,
     blissful_args=None,
 ):
-
     do_cfg_for_step = True  # Default true so behavior only altered if blissful args present
     do_zero_init = do_zero_scale = False
     if (
