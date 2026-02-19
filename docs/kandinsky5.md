@@ -122,7 +122,7 @@ DiTのチェックポイントは `--dit` で明示的に指定できます（�
 
 ## Pre-caching / 事前キャッシュ
 
-Pre-caching is required before training. This involves caching both latents and text encoder outputs.
+Pre-caching is required before training. This involves caching both latents and text encoder outputs. Note that caches created for Video Pro and Lite are NOT interchangeable with ones created for Image Lite - attempting to do this will create errors so please remake the cache when switching between image model/video model training e.g. Flux and Hunyuan VAE types.
 
 ### Notes for Kandinsky5 / Kandinsky5の注意点
 
@@ -134,6 +134,8 @@ Pre-caching is required before training. This involves caching both latents and 
 
 <details>
 <summary>日本語</summary>
+
+トレーニング前に事前キャッシュが必要です。これには、潜在出力とテキスト エンコーダー出力の両方のキャッシュが含まれます。 Video Pro および Lite 用に作成されたキャッシュは、Image Lite 用に作成されたキャッシュと互換性がないことに注意してください。これを実行しようとするとエラーが発生するため、画像モデルとビデオ モデルのトレーニングを切り替えるときにキャッシュを再作成してください。 Flux および Hunyuan VAE タイプ。
 
 - 学習前に、`kandinsky5_cache_text_encoder_outputs.py` による **テキストエンコーダ出力のキャッシュ** が必須です。
 - `--text_encoder_qwen` / `--text_encoder_clip` はHugging Face Transformersのモデルです。モデルID（推奨）またはローカルのHF snapshotディレクトリを指定してください。
