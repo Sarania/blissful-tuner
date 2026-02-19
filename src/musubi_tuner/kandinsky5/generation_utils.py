@@ -204,12 +204,14 @@ def get_velocity(
     null_text_rope_pos,
     guidance_weight,
     conf,
+    cur_step,
+    is_last_step=False,
     sparse_params=None,
     attention_mask=None,
     null_attention_mask=None,
     blissful_args=None,
-    cur_step=None,
 ):
+
     do_cfg_for_step = True  # Default true so behavior only altered if blissful args present
     do_zero_init = do_zero_scale = False
     if (
@@ -238,6 +240,9 @@ def get_velocity(
             sparse_params=sparse_params,
             attention_mask=attention_mask,
         )
+        if is_last_step:  # Workaround noisy outputs
+            do_cfg_for_step = False
+
         if abs(guidance_weight - 1.0) > 1e-6 and do_cfg_for_step:
             uncond_pred_velocity = dit(
                 x,
@@ -405,7 +410,6 @@ def generate_sample_latents_only(
         conf,
         progress=progress,
         seed=seed,
-        tp_mesh=None,
         attention_mask=attention_mask,
         null_attention_mask=null_attention_mask,
         blissful_args=blissful_args,
@@ -434,7 +438,6 @@ def generate(
     conf,
     progress=False,
     seed=6554,
-    tp_mesh=None,
     attention_mask=None,
     null_attention_mask=None,
     blissful_args=None,
@@ -472,6 +475,7 @@ def generate(
         previewer.noise_remain = 1.0000
         if scheduler is None:
             previewer.sigmas = timesteps
+    total_steps = len(timesteps) - 1
 
     for i, (timestep, timestep_diff) in enumerate(tqdm(zip(timesteps[:-1], torch.diff(timesteps)), total=len(timesteps) - 1)):
         if model.visual_cond:
@@ -481,6 +485,8 @@ def generate(
             model_input = torch.cat([img, visual_cond, visual_cond_mask], dim=-1)
         else:
             model_input = img
+
+        is_last_step = i + 1 == len(timesteps) - 1
 
         pred_velocity = get_velocity(
             model,
@@ -493,11 +499,12 @@ def generate(
             null_text_rope_pos,
             guidance_weight,
             conf,
+            cur_step=i,
+            is_last_step=is_last_step,
             sparse_params=sparse_params,
             attention_mask=attention_mask,
             null_attention_mask=null_attention_mask,
             blissful_args=blissful_args,
-            cur_step=i,
         )
         latent = img[..., : pred_velocity.shape[-1]]  # Slice off any potential extra ti2i channels else does nothing
         if args is None or args.scheduler == "default":
