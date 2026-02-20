@@ -9,7 +9,6 @@ Created on Mon Mar 10 16:47:29 2025
 """
 
 import argparse
-import copy
 import os
 from typing import List, Optional
 import torch
@@ -51,8 +50,8 @@ class LatentPreviewer:
 
         if (
             model_type != "framepack" and original_latents is not None
-        ):  # Framepack will send in na clean latent, others will be noisy
-            copied_latents = copy.deepcopy(original_latents)
+        ):  # Framepack will send in a clean latent, others will be noisy
+            copied_latents = original_latents.detach().clone()
             self.original_latents = copied_latents.to(self.device)
             self.subtract_noise = True
             if scheduler is not None:
@@ -74,7 +73,7 @@ class LatentPreviewer:
     @torch.inference_mode()
     def preview(self, latents_to_preview: torch.Tensor, step: Optional[int] = None) -> None:
         self.clean_cache()
-        noisy_latents = copy.deepcopy(latents_to_preview)  # Break assoc with original
+        noisy_latents = latents_to_preview.detach().clone()  # Break assoc with original
         if self.model_type in ["wan", "k5"]:
             noisy_latents = noisy_latents.unsqueeze(0)  # Add B dim
         elif self.model_type in ["hunyuan", "framepack"]:  # Already has B dim
@@ -110,9 +109,8 @@ class LatentPreviewer:
             noise_remaining = self.noise_remain
         elif step is not None and self.sigmas is not None:
             noise_remaining = self.sigmas[step]
-        else:
-            if not self.warning_done:
-                self.warning_done = True
+        elif not self.warning_done:  # No sigmas --> Warn once
+            self.warning_done = True
             logger.warning("No sigmas provided to previewer so preview may be incorrect/bad!")
         # Subtract the portion of original latents
         denoisy_latents = noisy_latents - (noise.to(device) * noise_remaining)
@@ -260,7 +258,7 @@ class LatentPreviewer:
         if self.model_type == "k5":
             latents = latents.permute(0, 4, 1, 2, 3)  # Comes in as channels last, make B, C, F, H, W
         elif self.model_type == "k5_flux":
-            latents = latents.permute(0, 3, 1, 2)  # Make B, C, H, W
+            latents = latents.permute(0, 3, 1, 2)  # Make B, C, H, W, later will add fake F for B, C, F, H, W
         idx = (
             "flux" if self.model_type == "k5_flux" else self.model_type if self.model_type not in ["k5", "framepack"] else "hunyuan"
         )
@@ -273,7 +271,7 @@ class LatentPreviewer:
 
         # For each frame, apply the linear transform
         latent_images = []
-        if self.model_type in ["flux", "k5_flux"]:
+        if self.model_type in ["flux", "k5_flux"]:  # Image VAE
             latents = latents[:, :, None, :, :]  # Will be B, C, H, W so make a fake frame dim to make life easy
         for t in range(latents.shape[2]):  # B, C, F, H, W
             extracted = latents[:, :, t, :, :][0].permute(1, 2, 0)  # shape = (H, W, C) after .permute(1,2,0)

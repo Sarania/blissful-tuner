@@ -61,6 +61,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         if args.task not in TASK_CONFIGS:
             raise ValueError(f"Unknown task '{args.task}'. Available: {list(TASK_CONFIGS.keys())}")
         self.task_conf = TASK_CONFIGS[args.task]
+        self.default_discrete_flow_shift = self.task_conf.scheduler_scale or 5.0
         from dataclasses import replace
 
         if getattr(args, "use_nabla_attention", False):
