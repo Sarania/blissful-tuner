@@ -48,13 +48,13 @@ class LatentPreviewer:
         if self.model_type not in ["hunyuan", "wan", "framepack", "flux", "k5", "k5_flux"]:
             raise ValueError(f"Unsupported model type: {self.model_type}")
 
-        if (
-            model_type != "framepack" and original_latents is not None
-        ):  # Framepack will send in a clean latent, others will be noisy
+        if model_type != "framepack" and original_latents is not None:
+            # Framepack will send in a clean latent, others will be noisy
             copied_latents = original_latents.detach().clone()
             self.original_latents = copied_latents.to(self.device)
             self.subtract_noise = True
             if scheduler is not None:
+                # Sometimes we have a scheduler, sometimes we track noise left in other ways or get it passed directly
                 self.sigmas = scheduler.sigmas
                 self.scheduler = scheduler
 
@@ -69,6 +69,7 @@ class LatentPreviewer:
             self.tae = tae_class(tae_sd).to("cpu", self.dtype)  # Offload for VRAM and match datatype
         elif self.mode == "latent2rgb":
             self.decoder = self.decode_latent2rgb
+        # Else case not needed since self.mode is internal and won't be out of range
 
     @torch.inference_mode()
     def preview(self, latents_to_preview: torch.Tensor, step: Optional[int] = None) -> None:
@@ -76,20 +77,17 @@ class LatentPreviewer:
         noisy_latents = latents_to_preview.detach().clone()  # Break assoc with original
         if self.model_type in ["wan", "k5"]:
             noisy_latents = noisy_latents.unsqueeze(0)  # Add B dim
-        elif self.model_type in ["hunyuan", "framepack"]:  # Already has B dim
-            pass
+
         denoisy_latents = self.subtract_original_and_normalize(noisy_latents, step) if self.subtract_noise else noisy_latents
         decoded = self.decoder(denoisy_latents)  # returned as F, C, H, W
 
         # Upscale if we used latent2rgb so output is same size as expected
         scale_factor = 8 if self.mode == "latent2rgb" else None
-        if scale_factor is not None:
-            upscaled = torch.nn.functional.interpolate(decoded, scale_factor=scale_factor, mode="bicubic", align_corners=False)
-        else:
-            upscaled = decoded
 
-        _, _, h, w = upscaled.shape
-        self.write_preview(upscaled, w, h)
+        if scale_factor is not None:
+            decoded = torch.nn.functional.interpolate(decoded, scale_factor=scale_factor, mode="bicubic", align_corners=False)
+
+        self.write_preview(decoded, decoded.shape[3], decoded.shape[2])
         self.clean_cache()
 
     def clean_cache(self):
@@ -97,24 +95,26 @@ class LatentPreviewer:
             torch.cuda.empty_cache()
 
     @torch.inference_mode()
-    def subtract_original_and_normalize(self, noisy_latents: torch.Tensor, step: Optional[int] = None):
-        # TODO: Make this not awful
-        device = noisy_latents.device
+    def subtract_original_and_normalize(self, noisy_latents: torch.Tensor, step: Optional[int] = None) -> torch.Tensor:
+        device, dtype = noisy_latents.device, noisy_latents.dtype
         noise = self.original_latents
         if self.scheduler is not None and self.sigmas is not None:
             noise_remaining = self.sigmas[self.scheduler.step_index]  # get step directly from scheduler
-            if hasattr(self.scheduler, "last_noise") and self.scheduler.last_noise is not None:
-                noise = self.scheduler.last_noise  # Some schedulers e.g. LCM change the noise/use additional noise.
+            last_noise = getattr(self.scheduler, "last_noise", None)
+            if last_noise is not None:
+                noise = last_noise
         elif self.noise_remain is not None:
             noise_remaining = self.noise_remain
         elif step is not None and self.sigmas is not None:
             noise_remaining = self.sigmas[step]
-        elif not self.warning_done:  # No sigmas --> Warn once
-            self.warning_done = True
-            logger.warning("No sigmas provided to previewer so preview may be incorrect/bad!")
-        # Subtract the portion of original latents
-        denoisy_latents = noisy_latents - (noise.to(device) * noise_remaining)
-        normalized_denoisy_latents = (denoisy_latents - denoisy_latents.mean()) / (denoisy_latents.std() + 1e-9)
+        else:
+            noise_remaining = 1.000
+            if not self.warning_done:  # No sigmas --> Warn once
+                self.warning_done = True
+                logger.warning("No sigmas provided to previewer so preview may be incorrect/bad!")
+        # Subtract the estimated remaining percent of original noisy latents from our current latent
+        denoisy_latents = noisy_latents - (noise.to(device, dtype) * noise_remaining)
+        normalized_denoisy_latents = (denoisy_latents - denoisy_latents.mean()) / (denoisy_latents.std() + 1e-9)  # Normalize
         return normalized_denoisy_latents
 
     @torch.inference_mode()
@@ -161,22 +161,22 @@ class LatentPreviewer:
         container.close()
 
     @torch.inference_mode()
-    def decode_taehv(self, latents: torch.Tensor):
+    def decode_taehv(self, latents: torch.Tensor) -> torch.Tensor:
         """
         Decodes latents with the TAEHV model, returns shape (F, C, H, W).
         """
         self.tae.to(self.device)  # Onload
         if self.model_type != "k5":  # comes in as B, C, F, H, W
-            latents_permuted = latents.permute(0, 2, 1, 3, 4)  # Reordered to B, F, C, H, W for TAE
+            latents_permuted = latents.permute(0, 2, 1, 3, 4)  # -> Reordered to B, F, C, H, W for TAE
         else:  # comes in as  B, F, H, W, C e.g. channels last
-            latents_permuted = latents.permute(0, 1, 4, 2, 3)  # Reordered to B, F, C, H, W for TAE
+            latents_permuted = latents.permute(0, 1, 4, 2, 3)  # -> Reordered to B, F, C, H, W for TAE
         latents_permuted = latents_permuted.to(device=self.device, dtype=self.dtype)
         decoded = self.tae.decode_video(latents_permuted, parallel=False, show_progress_bar=False)
         self.tae.to("cpu")  # Offload
         return decoded.squeeze(0)  # squeeze off batch dimension as next step doesn't want it
 
     @torch.inference_mode()
-    def decode_taesd(self, latents: torch.Tensor):
+    def decode_taesd(self, latents: torch.Tensor) -> torch.Tensor:
         if self.model_type == "k5_flux":
             latents = latents.permute(0, 3, 1, 2)  # Reordered to B, C, H, W for TAE
         self.tae.to(self.device)  # Onload
@@ -186,12 +186,12 @@ class LatentPreviewer:
         return decoded
 
     @torch.inference_mode()
-    def decode_latent2rgb(self, latents: torch.Tensor):
+    def decode_latent2rgb(self, latents: torch.Tensor) -> torch.Tensor:
         """
         Decodes latents to RGB using linear transform, returns shape (F, 3, H, W).
         """
         model_params = {
-            "hunyuan": {
+            "hunyuan": {  # Also used by framepack, kandinsky video
                 "rgb_factors": [
                     [-0.0395, -0.0331, 0.0445],
                     [0.0696, 0.0795, 0.0518],
@@ -212,7 +212,7 @@ class LatentPreviewer:
                 ],
                 "bias": [0.0259, -0.0192, -0.0761],
             },
-            "wan": {
+            "wan": {  # 2.1, 2.2 but not 5B
                 "rgb_factors": [
                     [-0.1299, -0.1692, 0.2932],
                     [0.0671, 0.0406, 0.0442],
@@ -233,7 +233,7 @@ class LatentPreviewer:
                 ],
                 "bias": [-0.1835, -0.0868, -0.3360],
             },
-            "flux": {
+            "flux": {  # Also used by kandinsky image
                 "rgb_factors": [
                     [-0.0346, 0.0244, 0.0681],
                     [0.0034, 0.0210, 0.0687],
@@ -258,10 +258,15 @@ class LatentPreviewer:
         if self.model_type == "k5":
             latents = latents.permute(0, 4, 1, 2, 3)  # Comes in as channels last, make B, C, F, H, W
         elif self.model_type == "k5_flux":
-            latents = latents.permute(0, 3, 1, 2)  # Make B, C, H, W, later will add fake F for B, C, F, H, W
-        idx = (
-            "flux" if self.model_type == "k5_flux" else self.model_type if self.model_type not in ["k5", "framepack"] else "hunyuan"
-        )
+            latents = latents.permute(0, 3, 1, 2)  # Make B, C, H, W, later we'll add fake F for B, C, F, H, W
+
+        if self.model_type in ["hunyuan", "wan", "flux"]:  # -> Uses own params
+            idx = self.model_type
+        elif self.model_type in ["k5", "framepack"]:  # -> Uses Hunyuan params
+            idx = "hunyuan"
+        elif self.model_type == "k5_flux":  # -> Uses Flux params
+            idx = "flux"
+
         latent_rgb_factors = model_params[idx]["rgb_factors"]
         latent_rgb_factors_bias = model_params[idx]["bias"]
 
@@ -271,7 +276,7 @@ class LatentPreviewer:
 
         # For each frame, apply the linear transform
         latent_images = []
-        if self.model_type in ["flux", "k5_flux"]:  # Image VAE
+        if self.model_type in ["flux", "k5_flux"]:  # Flux VAE
             latents = latents[:, :, None, :, :]  # Will be B, C, H, W so make a fake frame dim to make life easy
         for t in range(latents.shape[2]):  # B, C, F, H, W
             extracted = latents[:, :, t, :, :][0].permute(1, 2, 0)  # shape = (H, W, C) after .permute(1,2,0)

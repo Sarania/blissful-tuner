@@ -474,7 +474,6 @@ def generate(
         previewer.noise_remain = 1.0000
         if scheduler is None:
             previewer.sigmas = timesteps
-    total_steps = len(timesteps) - 1
 
     for i, (timestep, timestep_diff) in enumerate(tqdm(zip(timesteps[:-1], torch.diff(timesteps)), total=len(timesteps) - 1)):
         if model.visual_cond:
@@ -505,10 +504,10 @@ def generate(
             null_attention_mask=null_attention_mask,
             blissful_args=blissful_args,
         )
-        latent = img[..., : pred_velocity.shape[-1]]  # Slice off any potential extra ti2i channels else does nothing
+        latent = img[..., : pred_velocity.shape[-1]]  # Slice off any potential extra ti2i channels, creates a view NOT new tensor
         if args is None or args.scheduler == "default":
             latent += timestep_diff * pred_velocity
-        else:
+        else:  # Note here latent becomes a new tensor, why we need the slice back in below
             latent = scheduler.step(pred_velocity, timestep, latent, return_dict=False)[0]
 
         if args is not None and args.preview_latent_every:
