@@ -46,7 +46,7 @@ import musubi_tuner.networks.lora as lora_module
 from musubi_tuner.dataset.config_utils import BlueprintGenerator, ConfigSanitizer
 from musubi_tuner.dataset.image_video_dataset import ARCHITECTURE_HUNYUAN_VIDEO, ARCHITECTURE_HUNYUAN_VIDEO_FULL
 from musubi_tuner.hv_generate_video import save_images_grid, save_videos_grid, resize_image_to_bucket, encode_to_latents
-
+from blissful_tuner.sdscripts_custom_train_functions import pyramid_noise_like, apply_noise_offset
 from blissful_tuner.blissful_logger import BlissfulLogger
 
 from musubi_tuner.utils import huggingface_utils, model_utils, train_utils, sai_model_spec
@@ -2113,11 +2113,8 @@ class NetworkTrainer:
 
         epoch_to_start = 0
         global_step = 0
-        noise_scheduler = (
-            FlowMatchDiscreteScheduler(shift=args.discrete_flow_shift, reverse=True, solver="euler")
-            if not args.image_flow_shift
-            else None
-        )
+        noise_scheduler = FlowMatchDiscreteScheduler(shift=args.discrete_flow_shift, reverse=True, solver="euler")
+
         loss_recorder = train_utils.LossRecorder()
         del train_dataset_group
 
@@ -2211,11 +2208,24 @@ class NetworkTrainer:
 
                     # Sample noise that we'll add to the latents
                     noise = torch.randn_like(latents)
+
+                    if args.noise_offset:  # Ported from sd-scripts
+                        if args.noise_offset_random_strength:
+                            noise_offset = torch.rand(1, device=latents.device) * args.noise_offset
+                        else:
+                            noise_offset = args.noise_offset
+                        noise = apply_noise_offset(latents, noise, noise_offset, args.adaptive_noise_scale)
+
+                    if args.multires_noise_iterations:  # Ditto
+                        noise = pyramid_noise_like(
+                            noise, latents.device, args.multires_noise_iterations, args.multires_noise_discount
+                        )
+
                     if args.image_flow_shift is not None:  # Use different flow shift values for images versus video, if provided
                         if latents.shape[2] == 1:  # Image
                             noise_scheduler = FlowMatchDiscreteScheduler(shift=args.image_flow_shift, reverse=True, solver="euler")
                         elif latents.shape[2] > 1:  # Video
-                            noise_scheduler = FlowMatchDiscreteScheduler(
+                            noise_scheduler = FlowMatchDiscreteScheduler(  # Really, ruff?
                                 shift=args.discrete_flow_shift, reverse=True, solver="euler"
                             )
 
@@ -3063,6 +3073,35 @@ def setup_parser_common() -> argparse.ArgumentParser:
         "--fp16_accumulation",
         action="store_true",
         help="(Not recommended for training) Enable full FP16 Accmumulation in FP16 GEMMs, requires Pytorch 2.7.0 or higher",
+    )
+    parser.add_argument(
+        "--multires_noise_iterations",
+        type=int,
+        default=None,
+        help="enable multires noise with this number of iterations (if enabled, around 6-10 is recommended) / Multires noiseを有効にしてこのイテレーション数を設定する（有効にする場合は6-10程度を推奨）",
+    )
+    parser.add_argument(
+        "--multires_noise_discount",
+        type=float,
+        default=0.3,
+        help="set discount value for multires noise (has no effect without --multires_noise_iterations) / Multires noiseのdiscount値を設定する（--multires_noise_iterations指定時のみ有効）",
+    )
+    parser.add_argument(
+        "--noise_offset",
+        type=float,
+        default=None,
+        help="enable noise offset with this value (if enabled, around 0.1 is recommended) / Noise offsetを有効にしてこの値を設定する（有効にする場合は0.1程度を推奨）",
+    )
+    parser.add_argument(
+        "--noise_offset_random_strength",
+        action="store_true",
+        help="use random strength between 0~noise_offset for noise offset. / noise offsetにおいて、0からnoise_offsetの間でランダムな強度を使用します。",
+    )
+    parser.add_argument(
+        "--adaptive_noise_scale",
+        type=float,
+        default=None,
+        help="add `latent mean absolute value * this value` to noise_offset (disabled if None, default) / latentの平均値の絶対値 * この値をnoise_offsetに加算する（Noneの場合は無効、デフォルト）",
     )
     return parser
 
