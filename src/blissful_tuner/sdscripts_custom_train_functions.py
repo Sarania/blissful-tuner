@@ -66,14 +66,14 @@ def pyramid_noise_like(
 
     for i in range(iterations):
         r = random.random() * 2 + 2  # in [2, 4)
-        hn = max(1, int(base_h / (r ** i)))
-        wn = max(1, int(base_w / (r ** i)))
+        hn = max(1, int(base_h / (r**i)))
+        wn = max(1, int(base_w / (r**i)))
 
         # Low-res noise then upsample to (base_h, base_w)
         low = torch.randn((bf, c, hn, wn), device=device, dtype=x.dtype)
         up = F.interpolate(low, size=(base_h, base_w), mode="bilinear", align_corners=False)
 
-        x = x + up * (discount ** i)
+        x = x + up * (discount**i)
 
         if hn == 1 or wn == 1:
             break
@@ -98,7 +98,7 @@ def pyramid_noise_like(
         return x
 
 
-# https://www.crosslabs.org//blog/diffusion-with-offset-noise
+# originally from https://www.crosslabs.org//blog/diffusion-with-offset-noise
 def apply_noise_offset(
     latents: torch.Tensor,
     noise: torch.Tensor,
@@ -134,9 +134,9 @@ def apply_noise_offset(
         noise_offset = noise_offset + adaptive_noise_scale * latent_mean
         noise_offset = torch.clamp(noise_offset, 0.0, None)
 
-    # Build a randn shape that is 1 everywhere except batch + channels (+ frames if you want per-frame offsets)
+    # Build a randn shape that is 1 everywhere except batch + channels (+ frames if per-frame offsets)
     rand_shape = [1] * dims
-    rand_shape[0] = latents.shape[0]      # batch
+    rand_shape[0] = latents.shape[0]  # batch
     rand_shape[cdim] = latents.shape[cdim]  # channels
 
     if dims == 5 and not include_frames_in_mean:

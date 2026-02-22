@@ -2188,8 +2188,8 @@ class NetworkTrainer:
         clean_memory_on_device(accelerator.device)
 
         optimizer_train_fn()  # Set training mode
-        is_channels_last = get_current_model_type() == "k5" 
-        logger.info(f"Is channels last {is_channels_last}")
+        is_channels_last = get_current_model_type() == "k5"
+
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch + 1}/{num_train_epochs}")
             current_epoch.value = epoch + 1

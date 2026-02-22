@@ -44,6 +44,7 @@ Note: The list is processed left to right, so modulus ranges should come first a
 
 ROOT_SCRIPT = os.path.basename(sys.argv[0]).lower()
 DIFFUSION_MODEL = None
+
 if "hv_" in ROOT_SCRIPT:
     DIFFUSION_MODEL = "hunyuan"
 elif "wan_" in ROOT_SCRIPT:
@@ -54,7 +55,7 @@ elif "flux_" in ROOT_SCRIPT:
     DIFFUSION_MODEL = "flux"
 elif "qwen_" in ROOT_SCRIPT:
     DIFFUSION_MODEL = "qwen"
-elif "kandinsky_" in ROOT_SCRIPT:
+elif "kandinsky5_" in ROOT_SCRIPT:
     DIFFUSION_MODEL = "k5"
 
 MODE = None
