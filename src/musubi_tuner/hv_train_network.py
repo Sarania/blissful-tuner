@@ -46,6 +46,7 @@ import musubi_tuner.networks.lora as lora_module
 from musubi_tuner.dataset.config_utils import BlueprintGenerator, ConfigSanitizer
 from musubi_tuner.dataset.image_video_dataset import ARCHITECTURE_HUNYUAN_VIDEO, ARCHITECTURE_HUNYUAN_VIDEO_FULL
 from musubi_tuner.hv_generate_video import save_images_grid, save_videos_grid, resize_image_to_bucket, encode_to_latents
+from blissful_tuner.blissful_core import get_current_model_type
 from blissful_tuner.sdscripts_custom_train_functions import pyramid_noise_like, apply_noise_offset
 from blissful_tuner.blissful_logger import BlissfulLogger
 
@@ -2187,7 +2188,8 @@ class NetworkTrainer:
         clean_memory_on_device(accelerator.device)
 
         optimizer_train_fn()  # Set training mode
-
+        is_channels_last = get_current_model_type() == "k5" 
+        logger.info(f"Is channels last {is_channels_last}")
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch + 1}/{num_train_epochs}")
             current_epoch.value = epoch + 1
@@ -2214,11 +2216,11 @@ class NetworkTrainer:
                             noise_offset = torch.rand(1, device=latents.device) * args.noise_offset
                         else:
                             noise_offset = args.noise_offset
-                        noise = apply_noise_offset(latents, noise, noise_offset, args.adaptive_noise_scale)
+                        noise = apply_noise_offset(latents, noise, noise_offset, args.adaptive_noise_scale, is_channels_last)
 
                     if args.multires_noise_iterations:  # Ditto
                         noise = pyramid_noise_like(
-                            noise, latents.device, args.multires_noise_iterations, args.multires_noise_discount
+                            noise, latents.device, args.multires_noise_iterations, args.multires_noise_discount, is_channels_last
                         )
 
                     if args.image_flow_shift is not None:  # Use different flow shift values for images versus video, if provided
