@@ -1681,6 +1681,11 @@ class NetworkTrainer:
             else:
                 logger.warning("FP16 accumulation not available! Requires at least PyTorch 2.7.0")
 
+        if args.adaptive_noise_scale is not None and args.noise_offset is None:
+            raise ValueError(
+                "adaptive_noise_scale requires noise_offset / adaptive_noise_scaleを使用するにはnoise_offsetが必要です"
+            )
+
         if args.disable_numpy_memmap:
             logger.info(
                 "Disabling numpy memory mapping for model loading (for Wan, FramePack and Qwen-Image). This may lead to higher memory usage but can speed up loading in some cases."
@@ -2052,6 +2057,11 @@ class NetworkTrainer:
             "ss_timestep_sampling": args.timestep_sampling,
             "ss_sigmoid_scale": args.sigmoid_scale,
             "ss_discrete_flow_shift": args.discrete_flow_shift,
+            "ss_noise_offset": args.noise_offset,
+            "ss_multires_noise_iterations": args.multires_noise_iterations,
+            "ss_multires_noise_discount": args.multires_noise_discount,
+            "ss_adaptive_noise_scale": args.adaptive_noise_scale,
+            "ss_noise_offset_random_strength": args.noise_offset_random_strength,
         }
 
         datasets_metadata = []
@@ -2184,6 +2194,15 @@ class NetworkTrainer:
         logger.info(
             f"DiT dtype: {first_param.dtype if first_param is not None else None}, device: {first_param.device if first_param is not None else accelerator.device}"
         )
+        if args.multires_noise_iterations:
+            logger.info(
+                f"Multires noise enabled - Iterations: {args.multires_noise_iterations}, Discount: {args.multires_noise_discount}"
+            )
+
+        if args.noise_offset:
+            logger.info(
+                f"Noise offset enabled - Value: {args.noise_offset}, Random offset: {args.noise_offset_random_strength}, Adaptive: {args.adaptive_noise_scale}"
+            )
 
         clean_memory_on_device(accelerator.device)
 
@@ -2211,7 +2230,7 @@ class NetworkTrainer:
                     # Sample noise that we'll add to the latents
                     noise = torch.randn_like(latents)
 
-                    if args.noise_offset:  # Ported from sd-scripts
+                    if args.noise_offset:  # Ported/adapted from sd-scripts
                         if args.noise_offset_random_strength:
                             noise_offset = torch.rand(1, device=latents.device) * args.noise_offset
                         else:
