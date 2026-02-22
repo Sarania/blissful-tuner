@@ -15,11 +15,11 @@ from rich.traceback import install as install_rich_tracebacks
 from blissful_tuner.utils import error_out
 from blissful_tuner.blissful_logger import BlissfulLogger
 from blissful_tuner.prompt_management import process_wildcards
-from blissful_tuner.utils import power_seed
+from blissful_tuner.utils import power_seed, string_to_seed
 
 logger = BlissfulLogger(__name__, "#8e00ed")
 
-BLISSFUL_VERSION = "0.13.66"
+BLISSFUL_VERSION = "0.14.66"
 
 CFG_SCHEDULE_HELP = """
 Comma-separated list of steps/ranges where CFG should be applied.
@@ -103,40 +103,51 @@ def blissful_prefunc(args: argparse.Namespace):
         cuda_list[0] += f", CUDA: {torch.version.cuda} CC: {cuda.major}.{cuda.minor}"
         cuda_list.append(f"Device: '{cuda.name}', VRAM: '{cuda.total_memory // 1024**2}MB'")
     logger.info(f"Blissful Tuner version {BLISSFUL_VERSION} extended from Musubi Tuner!")
+    logger.info(f"Tuner running in '{MODE}' mode!")
     logger.info(f"PyTorch: {torch.__version__}, Memory allocation: '{allocator}', FP8 math capable: '{can_use_fp8}'")
+
     for string in cuda_list:
         logger.info(string)
 
-    if hasattr(args, "optimized") and args.optimized and MODE == "generate":
-        logger.info("Optimized arguments enabled! (Still may need to tune '--blocks_to_swap' etc if you OOM)")
-        args.fp16_accumulation = True
-        args.attn_mode = "sageattn"
-        args.compile = True
-        args.fp8_scaled = True
-        if DIFFUSION_MODEL == "wan":
-            args.rope_func = "comfy"
-            args.simple_modulation = True
-        elif DIFFUSION_MODEL in ["hunyuan", "framepack"] and can_use_fp8:
-            args.fp8_fast = True
-        elif DIFFUSION_MODEL == "flux":
-            args.compile = False
-            if can_use_fp8:
+    if MODE == "generate":
+        if getattr(args, "optimized", False):
+            logger.info("Optimized arguments enabled! (Still may need to tune '--blocks_to_swap' etc if you OOM)")
+            args.fp16_accumulation = True
+            args.attn_mode = "sageattn"
+            args.compile = True
+            args.fp8_scaled = True
+            if DIFFUSION_MODEL == "wan":
+                args.rope_func = "comfy"
+                args.simple_modulation = True
+            elif DIFFUSION_MODEL in ["hunyuan", "framepack"] and can_use_fp8:
                 args.fp8_fast = True
+            elif DIFFUSION_MODEL == "flux":
+                args.compile = False
+                if can_use_fp8:
+                    args.fp8_fast = True
 
-    if hasattr(args, "fp8_fast") and args.fp8_fast and not can_use_fp8:
-        logger.warning("Requested fp8 math (--fp8_fast) but Torch/CUDA reports it's not available so you may encounter errors!")
+        if not can_use_fp8 and getattr(args, "fp8_fast", False):
+            logger.warning("Requested fp8 math (--fp8_fast) but Torch/CUDA reports it's not available so you may encounter errors!")
 
-    if hasattr(args, "fp16_accumulation") and args.fp16_accumulation and MODE == "generate":
-        logger.info("Enabling FP16 accumulation...")
+        if DIFFUSION_MODEL == "wan" and args.video_path is not None:
+            if "i2v" in args.task:
+                logger.info("V2V operating in IV2V mode!")
+            else:
+                logger.info("V2V operating in normal mode!")
+
+    elif MODE == "train":
+        if type(getattr(args, "seed", None)) == "str":
+            args.seed = string_to_seed(args.seed)
+
+    # Common
+    if getattr(args, "fp16_accumulation", False):
         if hasattr(torch.backends.cuda.matmul, "allow_fp16_accumulation"):
+            logger.info("Enabling FP16 accumulation")
             torch.backends.cuda.matmul.allow_fp16_accumulation = True
+            if MODE == "train":
+                logger.warning("FP16 accumulation is /not/ recommended when training due to degraded quality!")
         else:
-            logger.warning("FP16 accumulation not available! Requires at least PyTorch 2.7.0")
-    if DIFFUSION_MODEL == "wan" and args.video_path is not None:
-        if "i2v" in args.task:
-            logger.info("V2V operating in IV2V mode!")
-        else:
-            logger.info("V2V operating in normal mode!")
+            logger.warning("FP16 accumulation requested but not available! Requires at least PyTorch 2.7.0")
 
 
 def add_blissful_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -368,7 +379,8 @@ def parse_blissful_args(args: argparse.Namespace) -> argparse.Namespace:
             error_out(ValueError, "--perp_neg cannot be used with --slg_mode 'original'")
         if args.riflex_index != 0 and args.rope_func.lower() != "comfy":
             error_out(ValueError, "RIFLEx can only be used with rope_func =='comfy'!")
-    if hasattr(args, "preview_latent_every") and args.preview_latent_every:
+
+    if getattr(args, "preview_latent_every", False):
         scheduler = args.scheduler if hasattr(args, "scheduler") else args.sample_solver if hasattr(args, "sample_solver") else None
         if scheduler and "sde" in scheduler.lower():
             error_out(

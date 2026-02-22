@@ -105,7 +105,7 @@ def encode_and_save_batch_flux(vae, batch: List[ItemInfo]):
         image_tensor = torch.from_numpy(item.content).unsqueeze(0).permute(0, 3, 1, 2) / 127.5 - 1.0  # + B, -> B, C, H, W
         image_tensor = image_tensor.to(vae.device, vae.dtype)
         enc_out = vae.encode(image_tensor)
-        lat_image = enc_out.latent_dist.sample().squeeze(0).permute(1, 2, 0)  # 1, C, H, W -> H, W, C
+        lat_image = enc_out.latent_dist.sample().squeeze(0)  # 1, C, H, W -> C, H, W
         latent = lat_image * vae.config.scaling_factor
         control_latent = None
         control_image = item.control_content
@@ -114,7 +114,7 @@ def encode_and_save_batch_flux(vae, batch: List[ItemInfo]):
             control_tensor = torch.from_numpy(control_image).unsqueeze(0).permute(0, 3, 1, 2) / 127.5 - 1.0  # + B, -> B, C, H, W
             control_tensor = control_tensor.to(vae.device, vae.dtype)
             enc_out = vae.encode(control_tensor)
-            lat_image = enc_out.latent_dist.sample().squeeze(0).permute(1, 2, 0)  # 1, C, H, W -> H, W, C
+            lat_image = enc_out.latent_dist.sample().squeeze(0)  # 1, C, H, W -> C, H, W
             control_latent = lat_image * vae.config.scaling_factor
 
         logger.info(

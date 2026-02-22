@@ -571,16 +571,17 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                             visual_cond_mask[-1] = 1
 
                     x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
-            else:  # latent is H, W, C = Flux VAE -> Image only task
+            else:  # latent is C, H, W = Flux VAE -> Image only task
                 duration = 1
-                height = latent_b.shape[0]
-                width = latent_b.shape[1]
-                x = noisy_input_b.unsqueeze(0)  # [1, H, W, C]
+                height = latent_b.shape[1]
+                width = latent_b.shape[2]
+                x = noisy_input_b.unsqueeze(0).permute(0, 2, 3, 1)  # [C, H, W] -> [1, H, W, C]
 
-                latents_control = batch.get("latents_control", None)  # [H, W, C]
+                latents_control = batch.get("latents_control", None)  # [C, H, W]
                 if latents_control is not None and transformer.instruct_type == "channel":
                     latents_control = latents_control[b].to(device=x.device, dtype=x.dtype)
-                    edit_latent = torch.cat([latents_control.unsqueeze(0), torch.ones_like(x[..., :1])], dim=-1)  # [1,H,W,C+1]
+                    latents_control = latents_control.unsqueeze(0).permute(0, 2, 3, 1)  # [C, H, W] -> [1, H, W, C]
+                    edit_latent = torch.cat([latents_control, torch.ones_like(x[..., :1])], dim=-1)  # [1,H,W,C+1]
                     x = torch.cat([x, edit_latent], dim=-1)  # [1,H,W, 2C+1]
 
             sparse_params = self._build_sparse_params(x, x.device)
@@ -610,20 +611,19 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                     attention_mask=None,
                 )
 
-            # transformer outputs [duration, H, W, C]; align to [duration, C, H, W]
-            model_pred = model_pred.permute(0, 3, 1, 2)
+            # transformer outputs [F, H, W, C]; align to [C, F, H, W]
+            model_pred = model_pred.permute(3, 0, 1, 2)
             target_d = noise_b - latent_b
-            if target_d.dim() == 4:  # HV
-                # C, F, H, W -> F, C, H, W to match duration
-                target_d = target_d.permute(1, 0, 2, 3)
-            else:  # FX
-                target_d = target_d.unsqueeze(0).permute(0, 3, 1, 2)  # H, W, C -> 1, C, H, W
+
+            if target_d.dim() == 3:  # FX
+                target_d = target_d.unsqueeze(1)  # C, H, W -> C, 1, H, W
 
             preds.append(model_pred)
             targets.append(target_d)
 
-        model_pred = torch.stack(preds, dim=0)  # B, F, C, H, W
-        target = torch.stack(targets, dim=0)  # B, F, C, H, W
+        model_pred = torch.stack(preds, dim=0)  # B, C, F, H, W
+        target = torch.stack(targets, dim=0)  # B, C, F, H, W
+
         return model_pred, target
 
     # endregion model specific

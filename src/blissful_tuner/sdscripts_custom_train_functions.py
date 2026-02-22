@@ -20,13 +20,12 @@ def pyramid_noise_like(
     device: Optional[torch.device] = None,
     iterations: int = 6,
     discount: float = 0.4,
-    channels_last: bool = False,
 ) -> torch.Tensor:
     """
     Adds multi-scale (pyramid) noise and rescales to ~unit variance.
     Supports:
-      - 4D: BCHW (channels_last=False) or BHWC (channels_last=True)
-      - 5D: BCFHW (channels_last=False) or BFHWC (channels_last=True)
+      - 4D: BCHW
+      - 5D: BCFHW
     For 5D, frames are treated as extra batch items (B*F) for bilinear scaling.
     """
     if device is None:
@@ -41,22 +40,12 @@ def pyramid_noise_like(
 
     # Convert to NCHW (4D) for interpolate.
     # For 5D, fold frames into batch: (B, C, F, H, W) -> (B*F, C, H, W)
-    # For channels_last, permute first.
+    x = noise
     if dims == 4:
-        if channels_last:
-            # BHWC -> BCHW
-            x = noise.permute(0, 3, 1, 2).contiguous()
-        else:
-            x = noise
         b, c, h, w = x.shape
         bf = b  # effective batch
 
     else:  # dims == 5
-        if channels_last:
-            # BFHWC -> BCFHW
-            x = noise.permute(0, 4, 1, 2, 3).contiguous()
-        else:
-            x = noise
         b, c, f, h, w = x.shape
         x = x.permute(0, 2, 1, 3, 4).contiguous().view(b * f, c, h, w)  # (B*F, C, H, W)
         bf = b * f  # effective batch
@@ -82,20 +71,10 @@ def pyramid_noise_like(
     x = x / x.std()
 
     # Convert back to the original layout
-    if dims == 4:
-        if channels_last:
-            # BCHW -> BHWC
-            x = x.permute(0, 2, 3, 1).contiguous()
-        return x
-
-    else:
+    if dims == 5:
         # (B*F, C, H, W) -> (B, F, C, H, W) -> BCFHW
         x = x.view(b, f, c, base_h, base_w).permute(0, 2, 1, 3, 4).contiguous()
-
-        if channels_last:
-            # BCFHW -> BFHWC
-            x = x.permute(0, 2, 3, 4, 1).contiguous()
-        return x
+    return x
 
 
 # originally from https://www.crosslabs.org//blog/diffusion-with-offset-noise
@@ -104,7 +83,6 @@ def apply_noise_offset(
     noise: torch.Tensor,
     noise_offset: Optional[torch.Tensor],
     adaptive_noise_scale: Optional[torch.Tensor],
-    channels_last: bool = False,
     include_frames_in_mean: bool = True,  # for 5D latents: mean over F too (closer to 4D semantics)
 ) -> torch.Tensor:
     if noise_offset is None:
@@ -116,18 +94,11 @@ def apply_noise_offset(
 
     # Figure out which axis is channels, and which axes are "spatial" (and optionally frames)
     if dims == 4:
-        # BCHW or BHWC
-        cdim = 1 if not channels_last else 3
-        reduce_dims = (2, 3) if not channels_last else (1, 2)  # H,W
+        # BCHW
+        reduce_dims = (2, 3)  # H,W
     else:
-        # BCFHW or BFHWC
-        cdim = 1 if not channels_last else 4
-        if not channels_last:
-            # (B, C, F, H, W)
-            reduce_dims = (2, 3, 4) if include_frames_in_mean else (3, 4)
-        else:
-            # (B, F, H, W, C)
-            reduce_dims = (1, 2, 3) if include_frames_in_mean else (2, 3)
+        # BCFHW
+        reduce_dims = (2, 3, 4) if include_frames_in_mean else (3, 4)
 
     if adaptive_noise_scale is not None:
         latent_mean = latents.mean(dim=reduce_dims, keepdim=True).abs()
@@ -137,12 +108,11 @@ def apply_noise_offset(
     # Build a randn shape that is 1 everywhere except batch + channels (+ frames if per-frame offsets)
     rand_shape = [1] * dims
     rand_shape[0] = latents.shape[0]  # batch
-    rand_shape[cdim] = latents.shape[cdim]  # channels
+    rand_shape[1] = latents.shape[1]  # channels
 
     if dims == 5 and not include_frames_in_mean:
         # If we're doing per-frame offsets, keep the frame dimension too
-        fdim = 2 if not channels_last else 1
-        rand_shape[fdim] = latents.shape[fdim]
+        rand_shape[2] = latents.shape[2]
 
     noise = noise + noise_offset * torch.randn(tuple(rand_shape), device=latents.device, dtype=noise.dtype)
     return noise

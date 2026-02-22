@@ -46,7 +46,7 @@ import musubi_tuner.networks.lora as lora_module
 from musubi_tuner.dataset.config_utils import BlueprintGenerator, ConfigSanitizer
 from musubi_tuner.dataset.image_video_dataset import ARCHITECTURE_HUNYUAN_VIDEO, ARCHITECTURE_HUNYUAN_VIDEO_FULL
 from musubi_tuner.hv_generate_video import save_images_grid, save_videos_grid, resize_image_to_bucket, encode_to_latents
-from blissful_tuner.blissful_core import get_current_model_type
+from blissful_tuner.blissful_core import get_current_model_type, blissful_prefunc
 from blissful_tuner.sdscripts_custom_train_functions import pyramid_noise_like, apply_noise_offset
 from blissful_tuner.blissful_logger import BlissfulLogger
 
@@ -379,6 +379,7 @@ class NetworkTrainer:
         self.num_timestep_buckets: Optional[int] = None  # for get_bucketed_timestep()
         self.vae_frame_stride = 4  # all architectures require frames to be divisible by 4, except Qwen-Image-Layered
         self.default_discrete_flow_shift = 14.5  # default value for discrete flow shift for all models TODO may be None is better
+        self.model_type = get_current_model_type()
 
     # TODO 他のスクリプトと共通化する
     def generate_step_logs(
@@ -894,6 +895,7 @@ class NetworkTrainer:
                     if mid_mask.any():
                         mid_count = mid_mask.sum().item()
                         h, w = latents.shape[-2:]
+
                         if args.timestep_sampling == "qinglong_flux":
                             mu = train_utils.get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))
                         elif args.timestep_sampling == "qinglong_qwen":
@@ -1673,14 +1675,6 @@ class NetworkTrainer:
                 " / SageAttentionは現在学習をサポートしていないようです。`--sdpa`や`--xformers`などの他のオプションを使ってください"
             )
 
-        if args.fp16_accumulation:
-            logger.info("Enabling FP16 accumulation")
-            if hasattr(torch.backends.cuda.matmul, "allow_fp16_accumulation"):
-                logger.warning("FP16 accumulation is /not/ recommended when training due to degraded quality!")
-                torch.backends.cuda.matmul.allow_fp16_accumulation = True
-            else:
-                logger.warning("FP16 accumulation not available! Requires at least PyTorch 2.7.0")
-
         if args.adaptive_noise_scale is not None and args.noise_offset is None:
             raise ValueError(
                 "adaptive_noise_scale requires noise_offset / adaptive_noise_scaleを使用するにはnoise_offsetが必要です"
@@ -2207,7 +2201,6 @@ class NetworkTrainer:
         clean_memory_on_device(accelerator.device)
 
         optimizer_train_fn()  # Set training mode
-        is_channels_last = get_current_model_type() == "k5"
 
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch + 1}/{num_train_epochs}")
@@ -2235,14 +2228,15 @@ class NetworkTrainer:
                             noise_offset = torch.rand(1, device=latents.device) * args.noise_offset
                         else:
                             noise_offset = args.noise_offset
-                        noise = apply_noise_offset(latents, noise, noise_offset, args.adaptive_noise_scale, is_channels_last)
+                        noise = apply_noise_offset(latents, noise, noise_offset, args.adaptive_noise_scale)
 
                     if args.multires_noise_iterations:  # Ditto
                         noise = pyramid_noise_like(
-                            noise, latents.device, args.multires_noise_iterations, args.multires_noise_discount, is_channels_last
+                            noise, latents.device, args.multires_noise_iterations, args.multires_noise_discount
                         )
 
-                    if args.image_flow_shift is not None:  # Use different flow shift values for images versus video, if provided
+                    if args.image_flow_shift is not None and latents.dim() == 5:
+                        # Use different flow shift values for images versus video, if provided
                         if latents.shape[2] == 1:  # Image
                             noise_scheduler = FlowMatchDiscreteScheduler(shift=args.image_flow_shift, reverse=True, solver="euler")
                         elif latents.shape[2] > 1:  # Video
@@ -2262,6 +2256,7 @@ class NetworkTrainer:
                     model_pred, target = self.call_dit(
                         args, accelerator, transformer, latents, batch, noise, noisy_model_input, timesteps, network_dtype
                     )
+
                     loss = torch.nn.functional.mse_loss(model_pred.to(network_dtype), target, reduction="none")
 
                     if weighting is not None:
@@ -2800,7 +2795,10 @@ def setup_parser_common() -> argparse.ArgumentParser:
         "--image_flow_shift",
         type=float,
         default=None,
-        help="Use a different flow shift value when training images(if provided) / 画像をトレーニングするときに異なるフローシフト値を使用する（提供されている場合）",
+        help=(
+            "If supplied, uses a different flow shift value for images when training images and video together. Only valid for video models!"
+            "指定した場合、画像とビデオを一緒にトレーニングするときに、画像に異なるフロー シフト値を使用します。ビデオ モデルにのみ有効です。"
+        ),
     )
 
     parser.add_argument(
@@ -3190,6 +3188,7 @@ def main():
 
     args = parser.parse_args()
     args = read_config_from_file(args, parser)
+    blissful_prefunc(args)
     trainer = NetworkTrainer()
     trainer.train(args)
 
