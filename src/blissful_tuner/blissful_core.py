@@ -136,8 +136,11 @@ def blissful_prefunc(args: argparse.Namespace):
                 logger.info("V2V operating in normal mode!")
 
     elif MODE == "train":
-        if type(getattr(args, "seed", None)) == "str":
-            args.seed = string_to_seed(args.seed)
+        if type(getattr(args, "seed", None)) is str:
+            try:
+                args.seed = int(args.seed)
+            except ValueError:
+                args.seed = string_to_seed(args.seed, bits=32)
 
     # Common
     if getattr(args, "fp16_accumulation", False):

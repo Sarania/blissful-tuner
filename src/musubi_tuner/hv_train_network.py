@@ -1654,6 +1654,7 @@ class NetworkTrainer:
     # endregion model specific
 
     def train(self, args):
+        blissful_prefunc(args)
         if torch.cuda.is_available():
             if args.cuda_allow_tf32:
                 torch.backends.cuda.matmul.allow_tf32 = True
@@ -2527,7 +2528,7 @@ def setup_parser_common() -> argparse.ArgumentParser:
         action="store_true",
         help="persistent DataLoader workers (useful for reduce time gap between epoch, but may use more memory) / DataLoader のワーカーを持続させる (エポック間の時間差を少なくするのに有効だが、より多くのメモリを消費する可能性がある)",
     )
-    parser.add_argument("--seed", type=int, default=None, help="random seed for training / 学習時の乱数のseed")
+    parser.add_argument("--seed", type=str, default=None, help="random seed for training / 学習時の乱数のseed")
     parser.add_argument(
         "--gradient_checkpointing", action="store_true", help="enable gradient checkpointing / gradient checkpointingを有効にする"
     )
@@ -3190,7 +3191,7 @@ def main():
 
     args = parser.parse_args()
     args = read_config_from_file(args, parser)
-    blissful_prefunc(args)
+
     trainer = NetworkTrainer()
     trainer.train(args)
 
