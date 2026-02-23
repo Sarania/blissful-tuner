@@ -92,7 +92,7 @@ def apply_noise_offset(
     if dims not in (4, 5):
         raise ValueError(f"Expected latents to be 4D or 5D, got {dims}D with shape {tuple(latents.shape)}")
 
-    # Figure out which axis is channels, and which axes are "spatial" (and optionally frames)
+    # Figure out which dims to mean over
     if dims == 4:
         # BCHW
         reduce_dims = (2, 3)  # H,W
@@ -112,7 +112,7 @@ def apply_noise_offset(
 
     if dims == 5 and not include_frames_in_mean:
         # If we're doing per-frame offsets, keep the frame dimension too
-        rand_shape[2] = latents.shape[2]
+        rand_shape[2] = latents.shape[2]  # frames
 
     noise = noise + noise_offset * torch.randn(tuple(rand_shape), device=latents.device, dtype=noise.dtype)
     return noise

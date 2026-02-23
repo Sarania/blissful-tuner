@@ -46,7 +46,7 @@ import musubi_tuner.networks.lora as lora_module
 from musubi_tuner.dataset.config_utils import BlueprintGenerator, ConfigSanitizer
 from musubi_tuner.dataset.image_video_dataset import ARCHITECTURE_HUNYUAN_VIDEO, ARCHITECTURE_HUNYUAN_VIDEO_FULL
 from musubi_tuner.hv_generate_video import save_images_grid, save_videos_grid, resize_image_to_bucket, encode_to_latents
-from blissful_tuner.blissful_core import get_current_model_type, blissful_prefunc
+from blissful_tuner.blissful_core import get_current_model_type, blissful_prefunc, get_current_version
 from blissful_tuner.sdscripts_custom_train_functions import pyramid_noise_like, apply_noise_offset
 from blissful_tuner.blissful_logger import BlissfulLogger
 
@@ -380,6 +380,7 @@ class NetworkTrainer:
         self.vae_frame_stride = 4  # all architectures require frames to be divisible by 4, except Qwen-Image-Layered
         self.default_discrete_flow_shift = 14.5  # default value for discrete flow shift for all models TODO may be None is better
         self.model_type = get_current_model_type()
+        self.tunerver = get_current_version()
 
     # TODO 他のスクリプトと共通化する
     def generate_step_logs(
@@ -2056,6 +2057,7 @@ class NetworkTrainer:
             "ss_multires_noise_discount": args.multires_noise_discount,
             "ss_adaptive_noise_scale": args.adaptive_noise_scale,
             "ss_noise_offset_random_strength": args.noise_offset_random_strength,
+            "bt_tunerver": self.tunerver,
         }
 
         datasets_metadata = []
@@ -2195,7 +2197,7 @@ class NetworkTrainer:
 
         if args.noise_offset:
             logger.info(
-                f"Noise offset enabled - Value: {args.noise_offset}, Random offset: {args.noise_offset_random_strength}, Adaptive: {args.adaptive_noise_scale}"
+                f"Noise offset enabled - Value: {args.noise_offset}, Random offset: {args.noise_offset_random_strength}{f', Adaptive: {args.adaptive_noise_scale}' if args.adaptive_noise_scale else ''}"
             )
 
         clean_memory_on_device(accelerator.device)

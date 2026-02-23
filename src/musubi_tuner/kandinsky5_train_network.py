@@ -571,7 +571,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                             visual_cond_mask[-1] = 1
 
                     x = torch.cat([x, visual_cond, visual_cond_mask], dim=-1)
-            else:  # latent is C, H, W = Flux VAE -> Image only task
+            else:  # latent is C, H, W = Flux VAE -> Image only task, no transformer.visual_cond
                 duration = 1
                 height = latent_b.shape[1]
                 width = latent_b.shape[2]
