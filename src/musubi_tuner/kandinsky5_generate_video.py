@@ -2,9 +2,8 @@ import argparse
 import os
 from types import SimpleNamespace
 from typing import Optional
-
 import torch
-from torchvision.transforms.functional import pil_to_tensor
+import torchvision.transforms.functional as F
 from safetensors.torch import load_file, save_file
 from safetensors import safe_open
 from datetime import datetime as datetime
@@ -261,44 +260,6 @@ def main():
     else:
         metadata = prepare_metadata(args) if not args.no_metadata else None
         logger.info(f"Prepared metadata: {metadata}")
-        # --- Stage 1: text encoder only ---
-        text_embedder_conf = SimpleNamespace(
-            qwen=SimpleNamespace(checkpoint_path=qwen_path, max_length=task_conf.text.qwen_max_length),
-            clip=SimpleNamespace(checkpoint_path=clip_path, max_length=task_conf.text.clip_max_length),
-        )
-        text_embedder = get_text_embedder(
-            text_embedder_conf,
-            device="cpu" if args.text_encoder_cpu else device,
-            quantized_qwen=args.quantized_qwen if not args.text_encoder_cpu else False,
-            qwen_auto=args.text_encoder_auto,
-        )
-        image_edit = args.image is not None and "-i2i-" in args.task
-        te_image = None if not image_edit else pil_to_tensor(_to_pil(args.image))
-        neg_text = args.negative_prompt or "low quality, bad quality"
-        enc_out, _ = text_embedder.encode(
-            [args.prompt],
-            te_image,
-            type_of_content=("video" if frames > 1 else "image" if not image_edit else "image_edit"),
-            use_system=True,
-        )
-        neg_out, _ = text_embedder.encode(
-            [neg_text],
-            te_image,
-            type_of_content=("video" if frames > 1 else "image" if not image_edit else "image_edit"),
-            use_system=True,
-        )
-
-        text_embeds = enc_out["text_embeds"].to("cpu")
-        pooled_embed = enc_out["pooled_embed"].to("cpu")
-        null_text_embeds = neg_out["text_embeds"].to("cpu")
-        null_pooled_embed = neg_out["pooled_embed"].to("cpu")
-
-        try:
-            text_embedder.to("cpu")
-        except Exception:
-            pass
-        del text_embedder
-        clean_memory_on_device(device)
 
         scale_per_step = None
         if args.cfg_schedule is not None:
@@ -362,6 +323,51 @@ def main():
             vae_for_encode.to("cpu")
             del vae_for_encode
             clean_memory_on_device(device)
+
+        text_embedder_conf = SimpleNamespace(
+            qwen=SimpleNamespace(checkpoint_path=qwen_path, max_length=task_conf.text.qwen_max_length),
+            clip=SimpleNamespace(checkpoint_path=clip_path, max_length=task_conf.text.clip_max_length),
+        )
+        text_embedder = get_text_embedder(
+            text_embedder_conf,
+            device="cpu" if args.text_encoder_cpu else device,
+            quantized_qwen=args.quantized_qwen if not args.text_encoder_cpu else False,
+            qwen_auto=args.text_encoder_auto,
+        )
+
+        image_edit = "-i2i-" in args.task
+        te_image = None
+        if image_edit and args.image:
+            pil_image = _to_pil(args.image)
+            te_image = F.pil_to_tensor(pil_image)
+            te_image = F.resize(te_image, (height, width))
+
+        neg_text = args.negative_prompt or "low quality, bad quality"
+        enc_out, _ = text_embedder.encode(
+            [args.prompt],
+            te_image,
+            type_of_content=("video" if frames > 1 else "image" if not image_edit else "image_edit"),
+            use_system=True,
+        )
+        neg_out, _ = text_embedder.encode(
+            [neg_text],
+            te_image,
+            type_of_content=("video" if frames > 1 else "image" if not image_edit else "image_edit"),
+            use_system=True,
+        )
+
+        text_embeds = enc_out["text_embeds"].to("cpu")
+        pooled_embed = enc_out["pooled_embed"].to("cpu")
+        null_text_embeds = neg_out["text_embeds"].to("cpu")
+        null_pooled_embed = neg_out["pooled_embed"].to("cpu")
+
+        try:
+            text_embedder.to("cpu")
+        except Exception:
+            pass
+        del text_embedder
+        clean_memory_on_device(device)
+
         dit_weight_dtype = None if args.fp8_scaled else ensure_dtype_form(args.dit_dtype, out_form="torch")
         conf_ns = SimpleNamespace(model=task_conf, metrics=SimpleNamespace(scale_factor=task_conf.scale_factor))
 
