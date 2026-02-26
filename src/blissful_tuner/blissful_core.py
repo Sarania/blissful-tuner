@@ -593,4 +593,10 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         action="store_true",
         help="Allow much more freedom when preparing latents for I2V or Image Edit i.e. allow any reasonable res which is divisible by 16 without resizing, automatically resizes input images to requested output res. Not compatible with NABLA",
     )
+    parser.add_argument(
+        "--i2i_extra_noise",
+        type=float,
+        default=None,
+        help="Extra latent noise for i2i.",
+    )
     return parser

@@ -219,12 +219,19 @@ def main():
     frames = args.frames or (5 if task_conf.dit_params.visual_cond else 1)
     i2v_mode = "first_last" if args.image_last else "first"
     steps = args.steps or task_conf.num_steps
-    args.steps = steps  # Previewer need
-
     guidance = args.guidance_scale if args.guidance_scale is not None else task_conf.guidance_weight
     scheduler_scale = args.scheduler_scale if args.scheduler_scale is not None else (task_conf.scheduler_scale or 1.0)
     latent_h = max(1, height // 8)
     latent_w = max(1, width // 8)
+
+    args.steps = steps  # Save these back for metadata etc
+    args.width = width
+    args.height = height
+    args.frames = frames
+    args.video_length = ((args.frames - 1) * 4) + 1
+    args.guidance_scale = guidance
+    args.flow_shift = args.scheduler_scale = scheduler_scale
+
     shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
     logger.info(
         f"WHF: {width}x{height}x{args.video_length}, Latent WHF: {latent_w}x{latent_h}x{frames}, Steps: {steps}, Guidance: {guidance}, Shift: {scheduler_scale}"
@@ -277,6 +284,7 @@ def main():
             torch.backends.cuda.matmul.fp32_precision = "tf32"
 
         # Prepare I2V
+        image_edit = "-i2i-" in args.task
         i2v_frames = None
         # Optional init image(s) -> latent first/last frames (i2v-style). Requires temporary VAE load.
         if args.image:
@@ -324,6 +332,11 @@ def main():
             del vae_for_encode
             clean_memory_on_device(device)
 
+        if args.i2i_extra_noise:
+            logger.info(f"I2VI adding {args.i2i_extra_noise * 100}% extra noise to conditioning latent")
+            bonus_noise = torch.randn_like(i2v_frames[0:1])
+            i2v_frames[0:1] = i2v_frames[0:1] + (bonus_noise * args.i2i_extra_noise)
+
         text_embedder_conf = SimpleNamespace(
             qwen=SimpleNamespace(checkpoint_path=qwen_path, max_length=task_conf.text.qwen_max_length),
             clip=SimpleNamespace(checkpoint_path=clip_path, max_length=task_conf.text.clip_max_length),
@@ -335,7 +348,6 @@ def main():
             qwen_auto=args.text_encoder_auto,
         )
 
-        image_edit = "-i2i-" in args.task
         te_image = None
         if image_edit and args.image:
             pil_image = _to_pil(args.image)
