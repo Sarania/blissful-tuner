@@ -43,6 +43,8 @@ Musubi Tunerの開発に尽力いただいたkohya-ssさん、重要なコード
 - Wanと同じアルゴリズムを使用したFP8スケールのサポート (`--fp8_scaled`、推論と学習の両方に強く推奨。FP8が優れているだけなので、これだけ知っておく必要があります!) (HY) (T)
 - CLIP用のプロンプトの分離 (`--prompt_2 "second prompt goes here"`、CLIPはよりシンプルなテキストに使用されるため、CLIPとは異なるプロンプトを提供します) (HY)
 - https://github.com/zer0int/ComfyUI-HunyuanVideo-Nyan に基づいてテキストエンコーダーを再スケール (`--te_multiplier llm clip`、例えば`--te_multiplier 0.9 1.2`のように、LLMの重みをわずかに下げ、CLIPの重みを上げる)（HY）
+- トレーニング モードと推論モードの両方で、Kandinsky5 モデルの完全なスイート (Video Pro/Video Lite T2V/I2V、Image Lite T2I、Image Edit) のサポートが大幅に改善されました。
+
 
 モデルに依存しない追加機能：
 （以下のスクリプトを使用する場合は、`--group postprocess` オプションを使用してプロジェクトを venv にインストールしてください（例：`pip install -e . --group postprocess --group dev` ですべての要件を完全にインストールしてください！）

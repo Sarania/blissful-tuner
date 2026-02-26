@@ -1,6 +1,6 @@
-# Contributing to Musubi Tuner
+# Contributing to Blissful Tuner
 
-Thank you for your interest in contributing to Musubi Tuner! We welcome contributions from the community and are excited to work with you to make this project even better.
+Thank you for your interest in contributing to Blissful Tuner! We welcome contributions from the community and are excited to work with you to make this project even better.
 
 ## Table of Contents
 
@@ -23,7 +23,7 @@ Before contributing, please:
 
 1. Read through this contributing guide
 2. Review the [README.md](README.md) to understand the project
-3. Check the [existing issues](https://github.com/kohya-ss/musubi-tuner/issues) and [discussions](https://github.com/kohya-ss/musubi-tuner/discussions)
+3. Check the [existing issues](https://github.com/sarania/blissful-tuner/issues) and [discussions](https://github.com/sarania/blissful-tuner/discussions)
 4. Set up your development environment
 
 ## Before You Contribute
@@ -33,8 +33,8 @@ Before contributing, please:
 - This project is under active development with limited maintainer resources
 - PR reviews and merges may take time
 - Breaking changes may occur as the project evolves
-- For questions and general discussion, use [GitHub Discussions](https://github.com/kohya-ss/musubi-tuner/discussions)
-- For bug reports and feature requests, use [GitHub Issues](https://github.com/kohya-ss/musubi-tuner/issues)
+- For questions and general discussion, use [GitHub Discussions](https://github.com/sarania/blissful-tuner/discussions)
+- For bug reports and feature requests, use [GitHub Issues](https://github.com/sarania/blissful-tuner/issues)
 
 ### Types of Contributions We Welcome
 
@@ -78,7 +78,7 @@ For feature requests:
 4. **Consider alternatives** and their trade-offs
 5. **Wait for feedback** before starting implementation (there's always a chance the PR won't be merged)
 
-For significant features, consider posting in [GitHub Discussions](https://github.com/kohya-ss/musubi-tuner/discussions) first to gather community input.
+For significant features, consider posting in [GitHub Discussions](https://github.com/sarania/blissful-tuner/discussions) first to gather community input.
 
 ### Contributing Code
 
@@ -102,8 +102,8 @@ For significant features, consider posting in [GitHub Discussions](https://githu
 
 1. **Fork and clone the repository**:
    ```shell
-   git clone https://github.com/your-username/musubi-tuner.git
-   cd musubi-tuner
+   git clone https://github.com/your-username/blissful-tuner.git
+   cd blissful-tuner
    ```
 
 2. **Set up the development environment**:
@@ -291,7 +291,7 @@ If your contribution includes third-party code:
 
 If you need help with:
 
-- **Using the software**: Check [GitHub Discussions](https://github.com/kohya-ss/musubi-tuner/discussions)
+- **Using the software**: Check [GitHub Discussions](https://github.com/sarania/blissful-tuner/discussions)
 - **Development setup**: Create an issue with the "question" label or ask in discussions
 - **Contributing process**: Reference this guide or ask in discussions
 
@@ -307,7 +307,7 @@ Contributors are recognized through:
 
 ## Final Notes
 
-We appreciate your interest in contributing to Musubi Tuner! This project benefits greatly from community contributions, and we're grateful for your time and effort.
+We appreciate your interest in contributing to Blissful Tuner! This project benefits greatly from community contributions, and we're grateful for your time and effort.
 
 Remember:
 - **Start small** with your first contribution
@@ -315,4 +315,4 @@ Remember:
 - **Be patient** with the review process
 - **Have fun** building amazing tools!
 
-Thank you for helping make Musubi Tuner better for everyone!
+Thank you for helping make Blissful Tuner better for everyone!

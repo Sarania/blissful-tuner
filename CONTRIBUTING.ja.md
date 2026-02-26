@@ -1,6 +1,6 @@
-# Musubi Tuner へのコントリビューション
+# Blissful Tuner へのコントリビューション
 
-Musubi Tuner 開発へのご支援、ご協力に感謝いたします。コミュニティからの開発へ手助けは、このプロジェクトにとって不可欠です。このドキュメントでは、コントリビューションの方法やプロジェクトへの参加方法について説明します。
+Blissful Tuner 開発へのご支援、ご協力に感謝いたします。コミュニティからの開発へ手助けは、このプロジェクトにとって不可欠です。このドキュメントでは、コントリビューションの方法やプロジェクトへの参加方法について説明します。貢献は大歓迎です。詳細は [CONTRIBUTING.md](./CONTRIBUTING.md) をご覧ください。
 
 ## 目次
 
@@ -23,7 +23,7 @@ Musubi Tuner 開発へのご支援、ご協力に感謝いたします。コミ�
 
 1. このドキュメントを読む
 2. [README.md](README.md) でプロジェクトを理解する
-3. [既存の Issue](https://github.com/kohya-ss/musubi-tuner/issues) と [ディスカッション](https://github.com/kohya-ss/musubi-tuner/discussions) を確認する
+3. [既存の Issue](https://github.com/sarania/blissful-tuner/issues) と [ディスカッション](https://github.com/sarania/blissful-tuner/discussions) を確認する
 4. 開発環境をセットアップする
 
 ## ご協力いただく前に
@@ -33,8 +33,8 @@ Musubi Tuner 開発へのご支援、ご協力に感謝いたします。コミ�
 - このプロジェクトのメンテナンスは限られた時間とリソースで行われています
 - PRのレビューとマージには時間がかかる場合があります
 - プロジェクトが成長する過程で破壊的変更が発生する可能性があります
-- 質問や一般的な議論には [GitHub Discussions](https://github.com/kohya-ss/musubi-tuner/discussions) をご利用ください
-- バグ報告や機能要求には [GitHub Issues](https://github.com/kohya-ss/musubi-tuner/issues) をご利用ください
+- 質問や一般的な議論には [GitHub Discussions](https://github.com/sarania/blissful-tuner/discussions) をご利用ください
+- バグ報告や機能要求には [GitHub Issues](https://github.com/sarania/blissful-tuner/issues) をご利用ください
 
 ### ご協力いただける例
 
@@ -78,7 +78,7 @@ Musubi Tuner 開発へのご支援、ご協力に感謝いたします。コミ�
 4. **代替案とそのトレードオフ**を検討してください
 5. **実装前にフィードバックを待つ**ことをお願いします（PRがマージされない可能性は常にあります）
 
-重要な機能については、まず [GitHub Discussions](https://github.com/kohya-ss/musubi-tuner/discussions) にコミュニティの意見を求めることを検討してください。
+重要な機能については、まず [GitHub Discussions](https://github.com/sarania/blissful-tuner/discussions) にコミュニティの意見を求めることを検討してください。
 
 ### コードのコントリビューション
 
@@ -102,8 +102,8 @@ Musubi Tuner 開発へのご支援、ご協力に感謝いたします。コミ�
 
 1. **リポジトリをフォークしてクローン**：
    ```shell
-   git clone https://github.com/your-username/musubi-tuner.git
-   cd musubi-tuner
+   git clone https://github.com/your-username/blissful-tuner.git
+   cd blissful-tuner
    ```
 
 2. **開発環境をセットアップ**：
@@ -291,7 +291,7 @@ PR を作成する際は以下を含めてください：
 
 内容に応じて以下の方法で質問してください：
 
-- **ソフトウェアの使用法など**: [GitHub Discussions](https://github.com/kohya-ss/musubi-tuner/discussions) をチェックしてください
+- **ソフトウェアの使用法など**: [GitHub Discussions](https://github.com/sarania/blissful-tuner/discussions) をチェックしてください
 - **開発環境のセットアップ**: 「question」ラベルで Issue を作成してするか、ディスカッションで質問してください
 - **コントリビューションのプロセス**: このガイドを参照するか、ディスカッションで質問してください
 
@@ -307,7 +307,7 @@ PR を作成する際は以下を含めてください：
 
 ## 最終に
 
-Musubi Tuner へのご協力に興味をお持ちいただき、ありがとうございます。このプロジェクトはコミュニティのご支援、ご協力で成り立っています。
+Blissful Tuner へのご協力に興味をお持ちいただき、ありがとうございます。このプロジェクトはコミュニティのご支援、ご協力で成り立っています。
 
 以下についてご留意いただければ幸いです：
 
@@ -316,4 +316,4 @@ Musubi Tuner へのご協力に興味をお持ちいただき、ありがとう�
 - **レビュープロセスは辛抱強く**お待ちいただければ幸いです
 - **ツールの構築と改善に一緒に取り組めればと**考えています
 
-皆様のMusubi Tuner へのご協力に重ねて感謝申し上げます。
+皆様のBlissful Tuner へのご協力に重ねて感謝申し上げます。

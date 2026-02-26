@@ -4,7 +4,7 @@
 
 Blissful extension of Musubi Tuner by Blyss Sarania
 
-Here you will find an extended version of Musubi Tuner with advanced and experimental features focused on creating a full suite of tools for working with generative video models. Preview videos as they generate, increase inference speed, make longer videos and gain more control over your creations and enhance them with VFI, upscaling and more! If you wanna get even more out of Musubi then you've come to the right place! Note for best performance and compatibility, Python 3.12 with PyTorch 2.7.0 or later is recommended! While development is done in Python 3.12, efforts are made to maintain compatibility back to 3.10 as well.
+Here you will find an extended version of Musubi Tuner with advanced and experimental features focused on creating a full suite of tools for working with generative video models. Preview videos as they generate, increase inference speed, make longer videos and gain more control over your creations and enhance them with VFI, upscaling and more! If you wanna get even more out of Musubi then you've come to the right place! Note for best performance and compatibility, Python 3.12 with PyTorch 2.7.0 or later is recommended! While development is done in Python 3.12, efforts are made to maintain compatibility back to 3.10 as well. Contributions are welcome, please see [CONTRIBUTING.md](./CONTRIBUTING.md) for details!
 
 IMPORTANT NOTE: Please only install either regular Musubi Tuner or Blissful Tuner into the same venv and uninstall the existing one (e.g. `pip uninstall blissful-tuner`) when switching between Musubi and Blissful. Blissful Tuner is built directly on top of Musubi Tuner and shares many files with it, switching without this step can cause many issues. Thanks!
 
@@ -41,6 +41,7 @@ Blissful Features:
 - FP8 scaled support using the same algo as Wan (`--fp8_scaled`, HIGHLY recommend both for inference and training. It's just better fp8 that's all you need to know!) (HY) (T)
 - Separate prompt for CLIP (`--prompt_2 "second prompt goes here"`, provides a different prompt to CLIP since it's used to simpler text) (HY)
 - Rescale text encoders based on https://github.com/zer0int/ComfyUI-HunyuanVideo-Nyan (`--te_multiplier llm clip` such as `--te_multiplier 0.9 1.2` to downweight the LLM slightly and upweight the CLIP slightly) (HY)
+- Significantly improved support for full suite of Kandinsky5 models - Video Pro/Video Lite T2V/I2V, Image Lite T2I and Image Edit in both training and inference modes!
 
 Non model specific extras:
 (Please make sure to install the project into your venv with `--group postprocess` (e.g.`pip install -e . --group postprocess --group dev` to fully install all requirements) if you want to use the below scripts!)
