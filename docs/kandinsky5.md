@@ -445,6 +445,7 @@ python kandinsky5_generate_video.py \
 - `--blocks_to_swap`: Number of blocks to offload to CPU
 - `--lora_weight`: Path(s) to LoRA weight file(s)
 - `--lora_multiplier`: LoRA multiplier(s)
+- `--optimized`: Overrides the default values of several command line args to provide an optimized but quality experience. Enables fp16_fast or fp8_fast depending on mode and hardware, fp8_scaled, sageattn and torch.compile. Requires SageAttention and Triton to be installed in addition to PyTorch 2.7.0 or higher!
 - `--preview_latent_every`: If specified, enables previews (saved to output folder as latent_preview.mp4/png) of the current generation every N steps. By default uses latent2RGB (very fast, lower quality) but can optionally use `--preview_vae` to specify a [TinyAutoencoder](https://huggingface.co/Blyss/BlissfulModels/tree/main/taehv) for fast, high quality previews! Use taehv for Video Pro/Lite and taef1 for Image!
 
 Additional tasks such as Lite and Image tasks are also available as well as various speed optimizations. For a complete list of available flags, please see `python kandinsky5_generate_video.py --help`.
@@ -474,6 +475,7 @@ Additional tasks such as Lite and Image tasks are also available as well as vari
 - `--blocks_to_swap`: CPUにオフロードするブロック数
 - `--lora_weight`: LoRA重みファイルへのパス
 - `--lora_multiplier`: LoRA係数
+- `--optimized`: いくつかのコマンドライン引数のデフォルト値をオーバーライドし、最適化された高品質なエクスペリエンスを提供します。モードとハードウェアに応じて fp16_fast または fp8_fast、fp8_scaled、sageattn、torch.compile を有効にします。PyTorch 2.7.0 以降に加えて、SageAttention と Triton がインストールされている必要があります。
 - `--preview_latent_every`: 指定すると、現在の世代のNステップごとのプレビュー（出力フォルダにlatent_preview.mp4/pngとして保存）が有効になります。デフォルトではlatent2RGB（非常に高速、低品質）を使用しますが、オプションで`--preview_vae`を使用して[TinyAutoencoder](https://huggingface.co/Blyss/BlissfulModels/tree/main/taehv)を指定し、高速で高品質のプレビューを実現できます。Video Pro/Liteの場合はtaehv、Imageの場合はtaef1を使用してください。
 
 LiteタスクやImageタスクなどの追加タスクに加え、様々な速度最適化も利用可能です。利用可能なフラグの完全なリストについては、`python kandinsky5_generate_video.py --help` を参照してください。

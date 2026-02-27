@@ -2053,13 +2053,16 @@ class NetworkTrainer:
             "ss_timestep_sampling": args.timestep_sampling,
             "ss_sigmoid_scale": args.sigmoid_scale,
             "ss_discrete_flow_shift": args.discrete_flow_shift,
-            "ss_noise_offset": args.noise_offset,
-            "ss_multires_noise_iterations": args.multires_noise_iterations,
-            "ss_multires_noise_discount": args.multires_noise_discount,
-            "ss_adaptive_noise_scale": args.adaptive_noise_scale,
-            "ss_noise_offset_random_strength": args.noise_offset_random_strength,
             "bt_tunerver": self.tunerver,
         }
+        if args.multires_noise_iterations:
+            metadata["ss_multires_noise_iterations"] = args.multires_noise_iterations
+            metadata["ss_multires_noise_discount"] = args.multires_noise_discount
+
+        if args.noise_offset:
+            metadata["ss_noise_offset"] = args.noise_offset
+            metadata["ss_adaptive_noise_scale"] = args.adaptive_noise_scale
+            metadata["ss_noise_offset_random_strength"] = args.noise_offset_random_strength
 
         datasets_metadata = []
         # tag_frequency = {}  # merge tag frequency for metadata editor # TODO support tag frequency

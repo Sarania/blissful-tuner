@@ -181,6 +181,7 @@ class DiffusionTransformer3D(nn.Module):
         sparse_params=None,
         attention_mask=None,
     ):
+        torch.compiler.cudagraph_mark_step_begin()  # Compile might explode if we don't!
         text_embed, time_embed, text_rope, visual_embed = self.before_text_transformer_blocks(
             text_embed, time, pooled_text_embed, x, text_rope_pos
         )

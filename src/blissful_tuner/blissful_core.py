@@ -112,7 +112,8 @@ def blissful_prefunc(args: argparse.Namespace):
     if MODE == "generate":
         if getattr(args, "optimized", False):
             logger.info("Optimized arguments enabled! (Still may need to tune '--blocks_to_swap' etc if you OOM)")
-            args.fp16_accumulation = True
+            if hasattr(args, "fp16_accumulation"):  # K5 uses fp16_fast for reasons
+                args.fp16_accumulation = True
             args.attn_mode = "sageattn"
             args.compile = True
             args.fp8_scaled = True
@@ -125,6 +126,21 @@ def blissful_prefunc(args: argparse.Namespace):
                 args.compile = False
                 if can_use_fp8:
                     args.fp8_fast = True
+            elif DIFFUSION_MODEL == "k5":
+                if not args.text_encoder_cpu:
+                    # Text encoder auto is prolly best in most cases but let the user force cpu if needed somewhy
+                    args.quantized_qwen = False
+                    args.text_encoder_auto = True
+
+                if can_use_fp8:  # fp8_scaled is on so we should use fp8 math if we have it
+                    args.fp8_fast = True
+                elif "pro" in args.task:  # Lite/Image degrade a fair bit under fp16 and are quicker anyway
+                    args.fp16_fast = True  # But pro can handle and benefits ~20%
+
+                if args.task in {"k5-lite-t2i-hd", "k5-lite-i2i-hd"}:  # Image models = lower resources needed
+                    args.compile_mode = "reduce-overhead"  # Image model is quick so reduce compile time
+                else:  # Video models
+                    pass
 
         if not can_use_fp8 and getattr(args, "fp8_fast", False):
             logger.warning("Requested fp8 math (--fp8_fast) but Torch/CUDA reports it's not available so you may encounter errors!")
@@ -521,6 +537,33 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument("--quantized_qwen", action="store_true", help="Quantize Qwen TE to NF4 with BitsAndBytes to save VRAM")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile optimization")
     parser.add_argument(
+        "--compile_backend",
+        type=str,
+        default="inductor",
+        help="torch.compile backend (default: inductor) / torch.compileのバックエンド（デフォルト: inductor）",
+    )
+    parser.add_argument(
+        "--compile_mode",
+        type=str,
+        default="default",  # 学習用のデフォルト
+        choices=["default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"],
+        help="torch.compile mode (default: default) / torch.compileのモード（デフォルト: default）",
+    )
+    parser.add_argument(
+        "--compile_dynamic",
+        type=str,
+        default=None,
+        choices=["true", "false", "auto"],
+        help="Dynamic shapes mode for torch.compile (default: None, same as auto)"
+        " / torch.compileの動的形状モード（デフォルト: None、autoと同じ動作）",
+    )
+    parser.add_argument(
+        "--compile_fullgraph",
+        action="store_true",
+        help="Enable fullgraph mode in torch.compile / torch.compileでフルグラフモードを有効にする",
+    )
+
+    parser.add_argument(
         "--output_type",
         type=str,
         default="video",
@@ -599,4 +642,12 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         default=None,
         help="Extra latent noise for i2i.",
     )
+    parser.add_argument(
+        "--optimized",
+        action="store_true",
+        help="Overrides the default values of several command line args to provide an optimized but quality experience. "
+        "Enables fp16_fast or fp8_fast depending on mode and hardware, fp8_scaled, sageattn and torch.compile."
+        "Requires SageAttention and Triton to be installed in addition to PyTorch 2.7.0 or higher!",
+    )
+
     return parser

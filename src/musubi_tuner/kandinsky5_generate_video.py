@@ -133,6 +133,18 @@ def parse_args() -> argparse.Namespace:
         "--lora_multiplier", type=float, nargs="*", default=None, help="LoRA multiplier(s), align with lora_weight order"
     )
     parser.add_argument("--fps", type=int, default=24, help="FPS for output video, 24 is default for K5")
+    parser.add_argument(
+        "--use_pinned_memory_for_block_swap",
+        action="store_true",
+        help="use pinned memory for block swapping, which may speed up data transfer between CPU and GPU but uses more shared GPU memory on Windows",
+    )
+    parser.add_argument(
+        "--attn_mode",
+        type=str,
+        default=None,
+        choices=["flash2", "flash3", "torch", "sageattn", "xformers", "sdpa"],
+        help="Sets attention backend, exclusive of the direct options like `--sdpa`, `--flash_attn` etc. but maintained for compatibility/continuity.",
+    )
     parser = add_blissful_k5_args(parser)
     return parser.parse_args()
 
@@ -140,6 +152,19 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
     args = parse_blissful_args(args)
+    if args.attn_mode:
+        args.sdpa = args.flash3 = args.sage_attn = args.xformers = args.flash_attn = False
+        if args.attn_mode in {"torch", "sdpa"}:
+            args.sdpa = True
+        elif args.attn_mode == "flash2":
+            args.flash_attn = True
+        elif args.attn_mode == "flash3":
+            args.flash3 = True
+        elif args.attn_mode == "sageattn":
+            args.sage_attn = True
+        elif args.attn_mode == "xformers":
+            args.xformers = True
+
     if args.fp8_fast and not args.fp8_scaled:
         raise ValueError("`--fp8_fast` requires `--fp8_scaled` but it is not enabled!")
 
@@ -178,7 +203,7 @@ def main():
         logger.info("Enabling torch.compile!")
         from musubi_tuner.kandinsky5.models.nn import activate_compile
 
-        activate_compile()
+        activate_compile(args.compile_backend, args.compile_mode, args.compile_fullgraph, args.compile_dynamic)
 
     args.vae_dtype = ensure_dtype_form(args.vae_dtype, out_form="torch")
     task_conf = TASK_CONFIGS[args.task]
@@ -332,7 +357,7 @@ def main():
             del vae_for_encode
             clean_memory_on_device(device)
 
-        if args.i2i_extra_noise:
+        if args.i2i_extra_noise and i2v_frames is not None:
             logger.info(f"I2VI adding {args.i2i_extra_noise * 100}% extra noise to conditioning latent")
             bonus_noise = torch.randn_like(i2v_frames[0:1])
             i2v_frames[0:1] = i2v_frames[0:1] + (bonus_noise * args.i2i_extra_noise)
@@ -433,7 +458,9 @@ def main():
             dit.dtype = dit_weight_dtype
 
         if args.blocks_to_swap > 0:
-            dit.enable_block_swap(args.blocks_to_swap, device, supports_backward=False, use_pinned_memory=False)
+            dit.enable_block_swap(
+                args.blocks_to_swap, device, supports_backward=False, use_pinned_memory=args.use_pinned_memory_for_block_swap
+            )
             dit.move_to_device_except_swap_blocks(device)
             dit.prepare_block_swap_before_forward()
         else:
