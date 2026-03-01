@@ -441,7 +441,9 @@ python kandinsky5_generate_video.py \
 - `--fp8_fast`: Use fast fp8 math available on RTX 40X0 (Ada Lovelace) and potentially later GPUs to improve speed substantially for a small quality loss
 - `--fp16_fast`: Use optimized fp16 math and fp16 accumulation available in PyTorch 2.7 or later to improve speed substantially. Quality loss is small for Video Pro but may be noticeable for Video Lite and Image!
 - `--text_encoder_auto`: Auto split the text encoder between GPU and CPU. Use this if you OOM when encoding prompts!
-- `--advanced_i2v`: Eases restrictions on size/shape for I2V/I2I modes and automatically scales input image to requested video size but pushing the model too far outside what it expects can cause issues so use smartly!
+- `--advanced_i2vi`: Eases restrictions on size/shape for I2V/I2I modes and automatically scales input image to requested video size but pushing the model too far outside what it expects can cause issues so use smartly!
+- `--i2vi_res_limit`: Override max resolution for I2V/I2I calculations, specify as one side of a square e.g. specify '2048' for 2048*2048. Same caution as previous.
+- `--i2vi_extra_noise`: Add this much extra latent noise to the input image for transformer conditioning. Can sometimes improve detail/variation but too much will degrade quality, around 0.05 (5%) is a good place to start.
 - `--blocks_to_swap`: Number of blocks to offload to CPU
 - `--lora_weight`: Path(s) to LoRA weight file(s)
 - `--lora_multiplier`: LoRA multiplier(s)
@@ -471,7 +473,9 @@ Additional tasks such as Lite and Image tasks are also available as well as vari
 - `--fp8_fast`: RTX 40X0 (Ada Lovelace) およびそれ以降の GPU で利用可能な高速 fp8 演算を使用して、わずかな品質損失で速度を大幅に向上させます
 - `--fp16_fast`: PyTorch 2.7 以降で利用可能な最適化された fp16 演算および fp16 累算を使用して、速度を大幅に向上させます。 Video Pro では品質の低下はわずかですが、Video Lite と Image では顕著になる可能性があります。
 - `--text_encoder_auto`: テキスト エンコーダーを GPU と CPU の間で自動分割します。プロンプトをエンコードするときに OOM する場合は、これを使用してください。
-- `--advanced_i2v`: I2V/I2I モードのサイズ/形状の制限を緩和し、入力画像を要求されたビデオ サイズに自動的にスケールしますが、モデルを期待値から大きく外しすぎると問題が発生する可能性があるため、賢く使用してください。
+- `--advanced_i2vi`: I2V/I2I モードのサイズ/形状の制限を緩和し、入力画像を要求されたビデオ サイズに自動的にスケールしますが、モデルを期待値から大きく外しすぎると問題が発生する可能性があるため、賢く使用してください。
+- `--i2vi_res_limit`: I2V/I2I 計算の最大解像度をオーバーライドします。正方形の一辺として指定します。 2048*2048 には「2048」を指定します。前回と同様の注意。
+- `--i2vi_extra_noise`: トランスコンディショニングのために、この量の余分な潜在ノイズを入力画像に追加します。ディテールやバリエーションを改善できる場合もありますが、多すぎると品質が低下するため、0.05 (5%) 程度から始めるとよいでしょう。
 - `--blocks_to_swap`: CPUにオフロードするブロック数
 - `--lora_weight`: LoRA重みファイルへのパス
 - `--lora_multiplier`: LoRA係数
