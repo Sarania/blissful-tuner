@@ -632,15 +632,21 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     )
     parser.add_argument("--no_metadata", action="store_true", help="Disable saving generation params in latent/mkv")
     parser.add_argument(
-        "--advanced_i2v",
+        "--advanced_i2vi",
         action="store_true",
         help="Allow much more freedom when preparing latents for I2V or Image Edit i.e. allow any reasonable res which is divisible by 16 without resizing, automatically resizes input images to requested output res. Not compatible with NABLA",
     )
     parser.add_argument(
-        "--i2i_extra_noise",
+        "--i2vi_extra_noise",
         type=float,
         default=None,
-        help="Extra latent noise for i2i.",
+        help="Extra latent noise for i2v/i2i. Can improve detail/variance, should be kept low like 0.05",
+    )
+    parser.add_argument(
+        "--i2vi_res_limit",
+        type=int,
+        default=None,
+        help="Override max res for i2v/i2i calculations, specify as one side of a square e.g. specify '2048' to set max res at 2048x2048",
     )
     parser.add_argument(
         "--optimized",

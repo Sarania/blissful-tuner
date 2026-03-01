@@ -233,8 +233,8 @@ def main():
 
     device = _get_device(args.device)
 
-    if args.advanced_i2v and task_conf.attention.type == "nabla":
-        raise ValueError("Cannot allow '--advanced_i2v' when NABLA attention is enabled!")
+    if args.advanced_i2vi and task_conf.attention.type == "nabla":
+        raise ValueError("Cannot allow '--advanced_i2vi' when NABLA attention is enabled!")
 
     width = args.width or task_conf.resolution
     height = args.height or task_conf.resolution
@@ -315,9 +315,13 @@ def main():
         if args.image:
             is_flux_vae = "-i2i-" in args.task
             vae_for_encode = trainer._load_vae_for_sampling(args, device=device)
-            max_area = 2048 * 2048 if args.advanced_i2v else 512 * 768 if int(task_conf.resolution) == 512 else 1024 * 1024
-            divisibility = 16 if args.advanced_i2v or task_conf.attention.type != "nabla" else 128
-            size_override = None if not args.advanced_i2v else (height, width)
+            if args.i2vi_res_limit is not None:
+                max_area = args.i2vi_res_limit * args.i2vi_res_limit
+                logger.info(f"Max area for i2vi updated to {args.i2vi_res_limit}*{args.i2vi_res_limit}")
+            else:
+                max_area = 2048 * 2048 if args.advanced_i2vi else 512 * 768 if int(task_conf.resolution) == 512 else 1024 * 1024
+            divisibility = 16 if args.advanced_i2vi or task_conf.attention.type != "nabla" else 128
+            size_override = None if not args.advanced_i2vi else (height, width)
             # Always encode the first image
             _, lat_image_first, _ = get_first_frame_from_image(
                 args.image,
@@ -352,15 +356,15 @@ def main():
                 height = latent_h * 8
                 shape = (1, frames, latent_h, latent_w, task_conf.dit_params.in_visual_dim)
                 if old_w != width or old_h != height:
-                    logger.warning(f"I2VI updated resolution (W*H) to: {width}x{height}, latent: {latent_w}x{latent_h}")
+                    logger.warning(f"I2VI updated output resolution (W*H) to: {width}x{height}, latent: {latent_w}x{latent_h}")
             vae_for_encode.to("cpu")
             del vae_for_encode
             clean_memory_on_device(device)
 
-        if args.i2i_extra_noise and i2v_frames is not None:
-            logger.info(f"I2VI adding {args.i2i_extra_noise * 100}% extra noise to conditioning latent")
+        if args.i2vi_extra_noise and i2v_frames is not None:
+            logger.info(f"I2VI adding {args.i2vi_extra_noise * 100}% extra noise to conditioning latent")
             bonus_noise = torch.randn_like(i2v_frames[0:1])
-            i2v_frames[0:1] = i2v_frames[0:1] + (bonus_noise * args.i2i_extra_noise)
+            i2v_frames[0:1] = i2v_frames[0:1] + (bonus_noise * args.i2vi_extra_noise)
 
         text_embedder_conf = SimpleNamespace(
             qwen=SimpleNamespace(checkpoint_path=qwen_path, max_length=task_conf.text.qwen_max_length),
