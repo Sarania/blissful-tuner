@@ -137,11 +137,6 @@ def blissful_prefunc(args: argparse.Namespace):
                 elif "pro" in args.task:  # Lite/Image degrade a fair bit under fp16 and are quicker anyway
                     args.fp16_fast = True  # But pro can handle and benefits ~20%
 
-                if args.task in {"k5-lite-t2i-hd", "k5-lite-i2i-hd"}:  # Image models = lower resources needed
-                    args.compile_mode = "reduce-overhead"  # Image model is quick so reduce compile time
-                else:  # Video models
-                    pass
-
         if not can_use_fp8 and getattr(args, "fp8_fast", False):
             logger.warning("Requested fp8 math (--fp8_fast) but Torch/CUDA reports it's not available so you may encounter errors!")
 
