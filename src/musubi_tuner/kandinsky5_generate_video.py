@@ -152,6 +152,7 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
     args = parse_blissful_args(args)
+    args.compile_dynamic = args.compile_dynamic == "true" if args.compile_dynamic != "auto" else None
     if args.attn_mode:
         args.sdpa = args.flash3 = args.sage_attn = args.xformers = args.flash_attn = False
         if args.attn_mode in {"torch", "sdpa"}:
