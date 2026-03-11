@@ -296,13 +296,13 @@ def decode_latents(latent_visual, vae, device="cuda", batch_size=1, num_frames=N
 
 
 def i2v_slice(
-    i2v_frames: torch.Tensor,
+    i2vi_frames: torch.Tensor,
     latent: torch.Tensor,
     visual_cond_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Slice first and optionally last frames into provided latent at positions 0, -1, and optionally update vcond mask"""
-    if i2v_frames is not None:
-        i2vf = i2v_frames.to(device=latent.device, dtype=latent.dtype)
+    if i2vi_frames is not None:
+        i2vf = i2vi_frames.to(device=latent.device, dtype=latent.dtype)
 
         # Normalize to [F,H,W,C]
         if i2vf.dim() == latent.dim() - 1:
@@ -334,7 +334,7 @@ def generate_sample_latents_only(
     null_text_embeds=None,
     null_pooled_embed=None,
     null_attention_mask=None,
-    i2v_frames=None,
+    i2vi_frames=None,
     num_steps=25,
     guidance_weight=5.0,
     scheduler_scale=1,
@@ -367,12 +367,15 @@ def generate_sample_latents_only(
 
     text_dict = {"text_embeds": text_embeds, "pooled_embed": pooled_embed}
     null_text_dict = {"text_embeds": null_text_embeds, "pooled_embed": null_pooled_embed}
+
+    is_ti2i = False
     if blissful_args is not None:
         blissful_args["first_noise"] = img
+        is_ti2i = i2vi_frames is not None and blissful_args["args"].task == "k5-lite-t2i-hd"
 
     if image_edit:
         if dit.instruct_type == "channel":
-            image = None if i2v_frames is None else i2v_frames[0:1]
+            image = None if i2vi_frames is None else i2vi_frames[0:1]
             if image is not None:
                 edit_latent = torch.cat([image, torch.ones_like(img[..., :1])], -1)
             else:
@@ -405,7 +408,7 @@ def generate_sample_latents_only(
         null_text_rope_pos,
         guidance_weight,
         scheduler_scale,
-        i2v_frames,
+        i2vi_frames,
         conf,
         progress=progress,
         seed=seed,
@@ -413,9 +416,9 @@ def generate_sample_latents_only(
         null_attention_mask=null_attention_mask,
         blissful_args=blissful_args,
     )
-    if i2v_frames is not None and not image_edit:
+    if i2vi_frames is not None and not (image_edit or is_ti2i):
         logger.info("I2V post processing!")
-        latents, _ = i2v_slice(i2v_frames, latents)
+        latents, _ = i2v_slice(i2vi_frames, latents)
         latents = normalize_first_frame(latents)
     return latents
 
@@ -433,7 +436,7 @@ def generate(
     null_text_rope_pos,
     guidance_weight,
     scheduler_scale,
-    i2v_frames,
+    i2vi_frames,
     conf,
     progress=False,
     seed=6554,
@@ -443,9 +446,9 @@ def generate(
 ):
     args = blissful_args["args"] if blissful_args is not None else None
     sparse_params = get_sparse_params(conf, {"visual": img}, device)
-
+    begin_noise = 1.000
     # Setup scheduler
-    if args is None or args.scheduler == "default":
+    if getattr(args, "scheduler", "default") == "default":
         logger.info(f"Using default Euler scheduler with shift {scheduler_scale}")
         timesteps = torch.linspace(1, 0, num_steps + 1, device=device)
         timesteps = scheduler_scale * timesteps / (1 + (scheduler_scale - 1) * timesteps)
@@ -461,8 +464,20 @@ def generate(
         scheduler.set_begin_index(0)
         timesteps = scheduler.sigmas.to(device)
 
+    if getattr(args, "task", None) == "k5-lite-t2i-hd" and i2vi_frames is not None:
+        base_noise = img
+        sample = i2vi_frames[0:1]
+        old_steps = num_steps
+        num_steps = args.steps = int(num_steps * args.ti2i_denoise_percent)
+        timesteps = timesteps[-(num_steps + 1) :]
+        timestep_noise_percent = timesteps[:1]
+        img = base_noise * timestep_noise_percent + (1 - timestep_noise_percent) * sample
+        begin_noise = timestep_noise_percent
+        logger.info(f"Set up TI2I with {100 * args.ti2i_denoise_percent}% denoise")
+        if scheduler is not None:
+            scheduler.set_begin_index(old_steps - num_steps)
     # Setup previewer
-    if args is not None and args.preview_latent_every:
+    if getattr(args, "preview_latent_every", False):
         previewer = LatentPreviewer(
             args,
             original_latents=blissful_args["first_noise"],
@@ -471,7 +486,7 @@ def generate(
             dtype=_GLOBAL_DTYPE,
             model_type="k5" if "2i-" not in args.task else "k5_flux",
         )
-        previewer.noise_remain = 1.0000
+        previewer.noise_remain = begin_noise
         if scheduler is None:
             previewer.sigmas = timesteps
 
@@ -479,7 +494,7 @@ def generate(
         if model.visual_cond:
             visual_cond = torch.zeros_like(img)
             visual_cond_mask = torch.zeros([*img.shape[:-1], 1], dtype=img.dtype, device=img.device)
-            img, visual_cond_mask = i2v_slice(i2v_frames, img, visual_cond_mask)
+            img, visual_cond_mask = i2v_slice(i2vi_frames, img, visual_cond_mask)
             model_input = torch.cat([img, visual_cond, visual_cond_mask], dim=-1)
         else:
             model_input = img
@@ -505,12 +520,12 @@ def generate(
             blissful_args=blissful_args,
         )
         latent = img[..., : pred_velocity.shape[-1]]  # Slice off any potential extra ti2i channels, creates a view NOT new tensor
-        if args is None or args.scheduler == "default":
+        if getattr(args, "scheduler", "default") == "default":
             latent += timestep_diff * pred_velocity
         else:  # Note here latent becomes a new tensor, why we need the slice back in below
             latent = scheduler.step(pred_velocity, timestep, latent, return_dict=False)[0]
 
-        if args is not None and args.preview_latent_every:
+        if getattr(args, "preview_latent_every", False):
             previewer.noise_remain += timestep_diff  # Diff is negative so add it to decrease noise_remain
             if (i + 1) % args.preview_latent_every == 0 and i < args.steps:
                 previewer.preview(latent)

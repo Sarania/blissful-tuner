@@ -638,6 +638,12 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
         help="Extra latent noise for i2v/i2i. Can improve detail/variance, should be kept low like 0.05",
     )
     parser.add_argument(
+        "--ti2i_denoise_percent",
+        type=float,
+        default=0.5,
+        help="Percent of diffusion schedule to run for TI2I. Use with 'k5-lite-t2i-hd' task and specify an `--image` for TI2I",
+    )
+    parser.add_argument(
         "--i2vi_res_limit",
         type=int,
         default=None,

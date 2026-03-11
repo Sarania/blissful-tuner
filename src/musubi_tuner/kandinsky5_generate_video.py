@@ -311,16 +311,16 @@ def main():
 
         # Prepare I2V
         image_edit = "-i2i-" in args.task
-        i2v_frames = None
+        i2vi_frames = None
         # Optional init image(s) -> latent first/last frames (i2v-style). Requires temporary VAE load.
         if args.image:
-            is_flux_vae = "-i2i-" in args.task
+            is_flux_vae = "2i-" in args.task
             vae_for_encode = trainer._load_vae_for_sampling(args, device=device)
             if args.i2vi_res_limit is not None:
                 max_area = args.i2vi_res_limit * args.i2vi_res_limit
                 logger.info(f"Max area for i2vi updated to {args.i2vi_res_limit}*{args.i2vi_res_limit}")
             else:
-                max_area = 2048 * 2048 if args.advanced_i2vi else 512 * 768 if int(task_conf.resolution) == 512 else 1024 * 1024
+                max_area = 4096 * 4096 if args.advanced_i2vi else 512 * 768 if int(task_conf.resolution) == 512 else 1024 * 1024
             divisibility = 16 if args.advanced_i2vi or task_conf.attention.type != "nabla" else 128
             size_override = None if not args.advanced_i2vi else (height, width)
             # Always encode the first image
@@ -346,11 +346,11 @@ def main():
                     is_flux_vae=is_flux_vae,
                 )
                 frame_list.append(lat_image_last[:1])
-            i2v_frames = torch.cat(frame_list, dim=0)
+            i2vi_frames = torch.cat(frame_list, dim=0)
             # If the init image was resized by the encoder, match sampling shape to it.
-            if i2v_frames is not None:
-                latent_h = int(i2v_frames.shape[1])
-                latent_w = int(i2v_frames.shape[2])
+            if i2vi_frames is not None:
+                latent_h = int(i2vi_frames.shape[1])
+                latent_w = int(i2vi_frames.shape[2])
                 old_w = width
                 old_h = height
                 width = latent_w * 8
@@ -362,10 +362,10 @@ def main():
             del vae_for_encode
             clean_memory_on_device(device)
 
-        if args.i2vi_extra_noise and i2v_frames is not None:
+        if args.i2vi_extra_noise and i2vi_frames is not None:
             logger.info(f"I2VI adding {args.i2vi_extra_noise * 100}% extra noise to conditioning latent")
-            bonus_noise = torch.randn_like(i2v_frames[0:1])
-            i2v_frames[0:1] = i2v_frames[0:1] + (bonus_noise * args.i2vi_extra_noise)
+            bonus_noise = torch.randn_like(i2vi_frames[0:1])
+            i2vi_frames[0:1] = i2vi_frames[0:1] + (bonus_noise * args.i2vi_extra_noise)
 
         text_embedder_conf = SimpleNamespace(
             qwen=SimpleNamespace(checkpoint_path=qwen_path, max_length=task_conf.text.qwen_max_length),
@@ -500,7 +500,7 @@ def main():
                 null_text_embeds=null_text_embeds,
                 null_pooled_embed=null_pooled_embed,
                 null_attention_mask=None,
-                i2v_frames=i2v_frames,
+                i2vi_frames=i2vi_frames,
                 num_steps=steps,
                 guidance_weight=guidance,
                 scheduler_scale=scheduler_scale,

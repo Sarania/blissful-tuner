@@ -17,7 +17,7 @@ from musubi_tuner.kandinsky5.models.text_embedders import get_text_embedder
 from musubi_tuner.utils import safetensors_utils
 from blissful_tuner.blissful_logger import BlissfulLogger
 
-logger = BlissfulLogger(__name__, "#8e00ed")
+logger = BlissfulLogger(__name__, "green")
 
 
 def _ensure_cache_architecture(item: ItemInfo):

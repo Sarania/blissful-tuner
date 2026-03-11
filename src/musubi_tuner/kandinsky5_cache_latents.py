@@ -15,7 +15,7 @@ import musubi_tuner.cache_latents as cache_latents
 from musubi_tuner.kandinsky5.models.vae import build_vae
 from blissful_tuner.blissful_logger import BlissfulLogger
 
-logger = BlissfulLogger(__name__, "#8e00ed")
+logger = BlissfulLogger(__name__, "green")
 
 
 def encode_and_save_batch(vae, batch: List[ItemInfo]):

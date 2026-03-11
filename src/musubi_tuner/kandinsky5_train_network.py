@@ -213,7 +213,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
         else:  # Flux VAE, if an image exists for i2i it's in control_image_path
             image_path = sample_parameter.get("control_image_path", None)
 
-        i2v_frames = vae_for_sampling = None
+        i2vi_frames = vae_for_sampling = None
 
         if image_path:
             frame_list = []
@@ -239,11 +239,11 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
                     is_flux_vae=False,
                 )
                 frame_list.append(end_image[:1])
-            i2v_frames = torch.cat(frame_list, dim=0)
+            i2vi_frames = torch.cat(frame_list, dim=0)
             vae_for_sampling.to("cpu")  # Save for later
-            if i2v_frames is not None:
-                latent_h = int(i2v_frames.shape[1])
-                latent_w = int(i2v_frames.shape[2])
+            if i2vi_frames is not None:
+                latent_h = int(i2vi_frames.shape[1])
+                latent_w = int(i2vi_frames.shape[2])
 
         shape = (1, latent_f, latent_h, latent_w, self.task_conf.dit_params.in_visual_dim)
 
@@ -256,7 +256,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             null_text_embeds=null_text_embeds,
             null_pooled_embed=null_pooled_embed,
             null_attention_mask=None,
-            i2v_frames=i2v_frames,
+            i2vi_frames=i2vi_frames,
             num_steps=sample_steps,
             guidance_weight=guidance_scale,
             scheduler_scale=scheduler_scale,
@@ -265,7 +265,7 @@ class Kandinsky5NetworkTrainer(NetworkTrainer):
             conf=conf_ns,
             progress=False,
             blissful_args=None,
-            image_edit=args.task == "k5-lite-i2i-hd" and i2v_frames is not None,
+            image_edit=args.task == "k5-lite-i2i-hd" and i2vi_frames is not None,
         )
 
         vae_for_sampling = self._load_vae_for_sampling(args, accelerator.device) if vae_for_sampling is None else vae_for_sampling
