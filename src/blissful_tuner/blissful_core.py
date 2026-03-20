@@ -640,7 +640,7 @@ def add_blissful_k5_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     parser.add_argument(
         "--ti2i_denoise_percent",
         type=float,
-        default=0.5,
+        default=None,
         help="Percent of diffusion schedule to run for TI2I. Use with 'k5-lite-t2i-hd' task and specify an `--image` for TI2I",
     )
     parser.add_argument(

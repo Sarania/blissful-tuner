@@ -312,13 +312,13 @@ def i2v_slice(
             raise ValueError(f"Expected 1 or 2 conditioning frames, got {i2vf.shape[0]}")
 
         # Always clamp the first frame
-        latent[:1] = i2vf[0:1]
+        latent[:1] = i2vf[0:1].detach().clone()
         if visual_cond_mask is not None:
             visual_cond_mask[:1] = 1
 
         # If we have a second frame, clamp the last frame too
         if i2vf.shape[0] == 2:
-            latent[-1:] = i2vf[1:2]
+            latent[-1:] = i2vf[1:2].detach().clone()
             if visual_cond_mask is not None:
                 visual_cond_mask[-1:] = 1
     return latent, visual_cond_mask
@@ -371,16 +371,12 @@ def generate_sample_latents_only(
     is_ti2i = False
     if blissful_args is not None:
         blissful_args["first_noise"] = img
-        is_ti2i = i2vi_frames is not None and blissful_args["args"].task == "k5-lite-t2i-hd"
+        is_ti2i = (
+            i2vi_frames is not None
+            and blissful_args["args"].ti2i_denoise_percent is not None
+            and "2i-hd" in blissful_args["args"].task
+        )
 
-    if image_edit:
-        if dit.instruct_type == "channel":
-            image = None if i2vi_frames is None else i2vi_frames[0:1]
-            if image is not None:
-                edit_latent = torch.cat([image, torch.ones_like(img[..., :1])], -1)
-            else:
-                edit_latent = torch.cat([torch.zeros_like(img), torch.zeros_like(img[..., :1])], -1)
-            img = torch.cat([img, edit_latent], dim=-1)
     # Shape/patch sanity guard: visual grid must be divisible by patch sizes
     ps_t, ps_h, ps_w = conf.model.dit_params.patch_size
     if (height % ps_h) != 0 or (width % ps_w) != 0 or (duration % ps_t) != 0:
@@ -415,6 +411,8 @@ def generate_sample_latents_only(
         attention_mask=attention_mask,
         null_attention_mask=null_attention_mask,
         blissful_args=blissful_args,
+        is_ti2i=is_ti2i,
+        image_edit=image_edit,
     )
     if i2vi_frames is not None and not (image_edit or is_ti2i):
         logger.info("I2V post processing!")
@@ -443,6 +441,8 @@ def generate(
     attention_mask=None,
     null_attention_mask=None,
     blissful_args=None,
+    is_ti2i=False,
+    image_edit=False,
 ):
     args = blissful_args["args"] if blissful_args is not None else None
     sparse_params = get_sparse_params(conf, {"visual": img}, device)
@@ -464,7 +464,7 @@ def generate(
         scheduler.set_begin_index(0)
         timesteps = scheduler.sigmas.to(device)
 
-    if getattr(args, "task", None) == "k5-lite-t2i-hd" and i2vi_frames is not None:
+    if is_ti2i:
         base_noise = img
         sample = i2vi_frames[0:1]
         old_steps = num_steps
@@ -476,6 +476,25 @@ def generate(
         logger.info(f"Set up TI2I with {100 * args.ti2i_denoise_percent}% denoise")
         if scheduler is not None:
             scheduler.set_begin_index(old_steps - num_steps)
+        scale_per_step = blissful_args["scale_per_step"]
+        if scale_per_step is not None:
+            steps_to_remove = []
+            for step in scale_per_step:
+                if step > num_steps:
+                    steps_to_remove.append(step)
+            for step in steps_to_remove:
+                _ = scale_per_step.pop(step)
+            logger.warning(f"Removed the following steps from CFG schedule due to shortened schedule from TI2I: {steps_to_remove}")
+
+    if image_edit:
+        if model.instruct_type == "channel":
+            image = None if i2vi_frames is None else i2vi_frames[0:1]
+            if image is not None:
+                logger.info("Prepared image edit latent!")
+                edit_latent = torch.cat([image, torch.ones_like(img[..., :1])], -1)
+            else:
+                edit_latent = torch.cat([torch.zeros_like(img), torch.zeros_like(img[..., :1])], -1)
+            img = torch.cat([img, edit_latent], dim=-1)
     # Setup previewer
     if getattr(args, "preview_latent_every", False):
         previewer = LatentPreviewer(
